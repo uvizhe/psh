@@ -6,11 +6,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Sha224, Digest};
 
 const DB_FILE: &str = ".psh.db";
+const PASSWORD_LEN: usize = 16;
 // TODO: Add reduced character set password generation ability
 // TODO: Make global salt/password to add to local salt or secret (so attacker couldn't easily
 //       guess inputs).
 // TODO: Show generated password until user hits Ctrl-C to exit program (then crear password from
-//       console)
+//       console).
+//       Maybe even don't show full password and copy it to clipboard with Ctrl-C
 
 #[derive(Copy, Clone, Serialize, Deserialize)]
 enum CharSet {
@@ -71,9 +73,40 @@ while Reduced set includes only letters and digits."
         let shifted = (byte as u16) << 8;     // Shift value so it exceeds 94
         let pos_relative = shifted % 94;      // Find relative position of a char in between 94 values
         let pos_absolute = pos_relative + 33; // Shift it to a starting pos of "good" chars
-        ascii_bytes.push(pos_absolute as u8);
+        match charset_config {
+            CharSet::Standard => ascii_bytes.push(pos_absolute as u8),
+            CharSet::Reduced => {
+                if (pos_absolute as u8).is_ascii_alphanumeric() {
+                    ascii_bytes.push(pos_absolute as u8);
+                }
+            }
+        }
     }
     assert!(ascii_bytes.is_ascii());
-    let ascii_hash = String::from_utf8(ascii_bytes).unwrap();
-    println!("{}", ascii_hash);
+
+    // Check Standard and Reduced set for inclusion of punctuation and numeric characters
+    // respectively.
+    // If the first half of `ascii_bytes` does not meet the criterium use another half.
+    let password_slice = &ascii_bytes[0..15];
+    match charset_config {
+        // Check if Standard set password include punctuation characters
+        // (chance of opposite is (62/94)^16 = ~0.1%)
+        CharSet::Standard => {
+            if !password_slice.iter().any(|b| b.is_ascii_punctuation()) {
+                ascii_bytes.reverse();
+            }
+        }
+        // Check if Reduced set password include numeric characters
+        // (chance of opposite is (52/62)^16 = ~0.4%)
+        // Note: reversing the array and using remaining unchecked characters does not raise the
+        // chance to meet criterium significantly, but we try at least.
+        CharSet::Reduced => {
+            if !password_slice.iter().any(|b| b.is_ascii_digit()) {
+                ascii_bytes.reverse();
+            }
+        }
+    }
+    ascii_bytes.truncate(PASSWORD_LEN);
+    let password = String::from_utf8(ascii_bytes).unwrap();
+    println!("{}", password);
 }
