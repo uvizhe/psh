@@ -64,49 +64,78 @@ while Reduced set includes only letters and digits."
         .unwrap();
 
     let salt = Sha224::digest(alias); // Make salt satisfy length criterium
-    let config = Config::default();
+    let mut config = Config::default();
+    config.hash_length = 64;
     let hash = argon2::hash_raw(secret.as_ref(), &salt, &config).unwrap();
 
-    let mut ascii_bytes = Vec::new();
+    let mut collected_bytes = Vec::new();
     for byte in hash {
         // ASCII has 94 printable characters (excluding space) starting from 33rd.
         let shifted = (byte as u16) << 8;     // Shift value so it exceeds 94
         let pos_relative = shifted % 94;      // Find relative position of a char in between 94 values
         let pos_absolute = pos_relative + 33; // Shift it to a starting pos of "good" chars
         match charset_config {
-            CharSet::Standard => ascii_bytes.push(pos_absolute as u8),
+            CharSet::Standard => collected_bytes.push(pos_absolute as u8),
             CharSet::Reduced => {
                 if (pos_absolute as u8).is_ascii_alphanumeric() {
-                    ascii_bytes.push(pos_absolute as u8);
+                    collected_bytes.push(pos_absolute as u8);
                 }
             }
         }
     }
-    assert!(ascii_bytes.is_ascii());
+    assert!(collected_bytes.is_ascii());
 
     // Check Standard and Reduced set for inclusion of punctuation and numeric characters
     // respectively.
-    // If the first half of `ascii_bytes` does not meet the criterium use another half.
-    let password_slice = &ascii_bytes[0..15];
+    // If the first chunk of `collected_bytes` does not meet the criterium try to use next.
+    let mut password_slice: Vec<u8> = vec![];
+    let mut remaining_bytes = collected_bytes.clone();
     match charset_config {
         // Check if Standard set password include punctuation characters
         // (chance of opposite is (62/94)^16 = ~0.1%)
         CharSet::Standard => {
-            if !password_slice.iter().any(|b| b.is_ascii_punctuation()) {
-                ascii_bytes.reverse();
+            while !remaining_bytes.is_empty() {
+                if remaining_bytes.len() >= PASSWORD_LEN {
+                    password_slice = remaining_bytes
+                        .drain(0..PASSWORD_LEN)
+                        .collect();
+                    if password_slice.iter().any(|b| b.is_ascii_punctuation()) {
+                        break;
+                    }
+                } else {
+                    // last resort
+                    collected_bytes.reverse();
+                    password_slice = collected_bytes
+                        .drain(0..PASSWORD_LEN)
+                        .collect();
+                    break;
+                }
             }
         }
         // Check if Reduced set password include numeric characters
         // (chance of opposite is (52/62)^16 = ~0.4%)
-        // Note: reversing the array and using remaining unchecked characters does not raise the
-        // chance to meet criterium significantly, but we try at least.
         CharSet::Reduced => {
-            if !password_slice.iter().any(|b| b.is_ascii_digit()) {
-                ascii_bytes.reverse();
+            while !remaining_bytes.is_empty() {
+                if remaining_bytes.len() >= PASSWORD_LEN {
+                    password_slice = remaining_bytes
+                        .drain(0..PASSWORD_LEN)
+                        .collect();
+                    if password_slice.iter().any(|b| b.is_ascii_digit()) {
+                        break;
+                    }
+                } else {
+                    // last resort
+                    collected_bytes.reverse();
+                    password_slice = collected_bytes
+                        .drain(0..PASSWORD_LEN)
+                        .collect();
+                    break;
+                }
             }
         }
     }
-    ascii_bytes.truncate(PASSWORD_LEN);
-    let password = String::from_utf8(ascii_bytes).unwrap();
+    assert!(password_slice.len() == PASSWORD_LEN);
+
+    let password = String::from_utf8(password_slice).unwrap();
     println!("{}", password);
 }
