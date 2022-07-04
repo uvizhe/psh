@@ -4,6 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use argon2::{self, Config};
+use clipboard::{ClipboardProvider, ClipboardContext};
 use console::{self, Term};
 use ctrlc;
 use dialoguer::{Input, Select, Password};
@@ -183,13 +184,17 @@ fn main() {
             sender1.send("newline").unwrap();
             sender2.send("newline").unwrap();
             if key.is_empty() {
+                let mut clipboard: ClipboardContext = ClipboardProvider::new().unwrap();
+                clipboard.set_contents(password).unwrap();
+                thread::sleep(Duration::from_millis(1)); // Without this line clipboard contents don't set for some reason
                 break;
             }
         }
     });
 
+    // Safeguard which clears the screen if no interaction occurs in two minutes
     let timer = thread::spawn(|| {
-        thread::sleep(Duration::from_secs(10));
+        thread::sleep(Duration::from_secs(120));
     });
 
     loop {
