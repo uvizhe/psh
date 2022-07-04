@@ -1,4 +1,12 @@
+use std::io;
+use std::process;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+
 use argon2::{self, Config};
+use console::Term;
+use ctrlc;
 use dialoguer::{Input, Select, Password};
 use home::home_dir;
 use pickledb::{PickleDb, PickleDbDumpPolicy};
@@ -35,18 +43,19 @@ fn get_db() -> PickleDb {
     db
 }
 
-fn get_charset(db: &mut PickleDb, alias: &str) -> CharSet {
+fn get_charset(term: &Term, db: &mut PickleDb, alias: &str, lines: &mut usize) -> CharSet {
     let charset: CharSet;
 
     if let Some(configured) = db.get(alias) {
         charset = configured;
     } else {
-        println!("Looks like you use this alias for the first time.
+        term.write_line("Looks like you use this alias for the first time.
 Please, select preferred character set for passwords that'll be generated
 for this alias.
 Note: Standard character set consists of all printable ASCII characters
 while Reduced set includes only letters and digits."
-        );
+        ).unwrap();
+        *lines += 5;
 
         let sets = vec![CharSet::Standard, CharSet::Reduced];
         let charset_choice = Select::new()
@@ -125,7 +134,16 @@ fn pick_suitable_slice(collected_bytes: Vec<u8>, charset: CharSet) -> Vec<u8> {
     password_slice
 }
 
+fn clear(term: &Term, lines: usize) {
+    term.clear_last_lines(lines).unwrap();
+    term.show_cursor().unwrap();
+}
+
 fn main() {
+    let mut produced_lines = 3;
+
+    let term = Arc::new(Term::stdout());
+
     let mut db = get_db();
 
     let alias: String = Input::new()
@@ -133,7 +151,7 @@ fn main() {
         .interact_text()
         .unwrap();
 
-    let charset = get_charset(&mut db, &alias);
+    let charset = get_charset(&term, &mut db, &alias, &mut produced_lines);
 
     let secret = Password::new()
         .with_prompt("Secret")
@@ -145,5 +163,43 @@ fn main() {
     let password_slice = pick_suitable_slice(collected_bytes, charset);
 
     let password = String::from_utf8(password_slice).unwrap();
-    println!("{}", password);
+
+    let term_clone = term.clone();
+    ctrlc::set_handler(move || {
+        clear(&term_clone, produced_lines);
+        process::exit(0);
+    }).unwrap();
+
+    term.write_line(&password).unwrap();
+    term.hide_cursor().unwrap();
+
+    let user = thread::spawn(|| {
+        let mut lines = 0;
+        loop {
+            let mut input = String::new();
+            io::stdin()
+                .read_line(&mut input)
+                .unwrap();
+            lines += 1;
+            if input == "\n" {
+                break;
+            }
+        }
+        lines
+    });
+
+    let timer = thread::spawn(|| {
+        thread::sleep(Duration::from_secs(10));
+    });
+
+    loop {
+        if user.is_finished() {
+            let lines = user.join().unwrap();
+            clear(&term, produced_lines + lines);
+            break;
+        } else if timer.is_finished() {
+            clear(&term, produced_lines);
+            break;
+        }
+    }
 }

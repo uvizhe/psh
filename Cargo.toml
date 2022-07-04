@@ -6,6 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+console = "0.15"
+ctrlc = "3.2"
 dialoguer = "0.10"
 home = "0.5"
 pickledb = "0.5"
