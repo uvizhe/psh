@@ -1,9 +1,9 @@
 use std::process;
-use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use argon2::{self, Config};
+use async_channel::{self, Receiver};
 use clipboard::{ClipboardProvider, ClipboardContext};
 use console::{self, Term};
 use ctrlc;
@@ -134,56 +134,63 @@ fn pick_suitable_slice(collected_bytes: Vec<u8>, charset: CharSet) -> Vec<u8> {
     password_slice
 }
 
-fn clear(term: &Term, lines: usize) {
-    term.clear_last_lines(lines).unwrap();
+// Completely clears command output on terminal
+fn clear_output(term: &Term, produced_lines: usize, receiver: &Receiver<&str>) {
+    let user_generated_lines = receiver.len();
+    let total_output_lines = produced_lines + user_generated_lines;
+    term.clear_last_lines(total_output_lines).unwrap();
     term.show_cursor().unwrap();
 }
 
 fn main() {
-    let mut produced_lines = 3;
+    let mut produced_lines = 3; // By default CLI produces 3 lines of output
 
-    let (sender1, ctrlc_receiver) = mpsc::channel();
-    let (sender2, normal_receiver) = mpsc::channel();
+    let (sender, receiver) = async_channel::unbounded();
 
     let term = Term::stdout();
 
     let mut db = get_db();
 
+    // Ask user for alias
     let alias: String = Input::new()
         .with_prompt("Alias")
         .interact_text()
         .unwrap();
 
+    // Get saved charset for an alias or ask user if it is a new alias
     let charset = get_charset(&term, &mut db, &alias, &mut produced_lines);
 
+    // Ask user for secret
     let secret = Password::new()
         .with_prompt("Secret")
         .interact()
         .unwrap();
 
     let collected_bytes = collect_bytes(alias, secret, charset);
-
+    // Pick password bytes to satisfy charset
     let password_slice = pick_suitable_slice(collected_bytes, charset);
 
     let password = String::from_utf8(password_slice).unwrap();
 
-    let term_clone = term.clone();
-    ctrlc::set_handler(move || {
-        let user_generated_lines = ctrlc_receiver.try_iter().count();
-        clear(&term_clone, produced_lines + user_generated_lines);
-        process::exit(0);
-    }).unwrap();
-
+    // Print password to STDOUT
     term.write_line(&password).unwrap();
     term.hide_cursor().unwrap();
+
+    // Handle Ctrl-C
+    // Clear everything before exiting a program
+    let term_clone = term.clone();
+    let recv_clone = receiver.clone();
+    ctrlc::set_handler(move || {
+        clear_output(&term_clone, produced_lines, &recv_clone);
+        process::exit(0);
+    }).unwrap();
 
     let term_clone = term.clone();
     let user = thread::spawn(move || {
         loop {
-            let key = term_clone.read_line().unwrap();
-            sender1.send("newline").unwrap();
-            sender2.send("newline").unwrap();
-            if key.is_empty() {
+            let input_line = term_clone.read_line().unwrap();
+            sender.try_send("newline").unwrap();
+            if input_line.is_empty() {
                 let mut clipboard: ClipboardContext = ClipboardProvider::new().unwrap();
                 clipboard.set_contents(password).unwrap();
                 thread::sleep(Duration::from_millis(1)); // Without this line clipboard contents don't set for some reason
@@ -197,10 +204,10 @@ fn main() {
         thread::sleep(Duration::from_secs(120));
     });
 
+    // Wait for user interaction or a safeguard activation
     loop {
         if user.is_finished() || timer.is_finished() {
-            let user_generated_lines = normal_receiver.try_iter().count();
-            clear(&term, produced_lines + user_generated_lines);
+            clear_output(&term, produced_lines, &receiver);
             break;
         }
     }
