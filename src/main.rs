@@ -1,11 +1,10 @@
-use std::io;
 use std::process;
-use std::sync::Arc;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use argon2::{self, Config};
-use console::Term;
+use console::{self, Term};
 use ctrlc;
 use dialoguer::{Input, Select, Password};
 use home::home_dir;
@@ -142,7 +141,10 @@ fn clear(term: &Term, lines: usize) {
 fn main() {
     let mut produced_lines = 3;
 
-    let term = Arc::new(Term::stdout());
+    let (sender1, ctrlc_receiver) = mpsc::channel();
+    let (sender2, normal_receiver) = mpsc::channel();
+
+    let term = Term::stdout();
 
     let mut db = get_db();
 
@@ -166,26 +168,24 @@ fn main() {
 
     let term_clone = term.clone();
     ctrlc::set_handler(move || {
-        clear(&term_clone, produced_lines);
+        let user_generated_lines = ctrlc_receiver.try_iter().count();
+        clear(&term_clone, produced_lines + user_generated_lines);
         process::exit(0);
     }).unwrap();
 
     term.write_line(&password).unwrap();
     term.hide_cursor().unwrap();
 
-    let user = thread::spawn(|| {
-        let mut lines = 0;
+    let term_clone = term.clone();
+    let user = thread::spawn(move || {
         loop {
-            let mut input = String::new();
-            io::stdin()
-                .read_line(&mut input)
-                .unwrap();
-            lines += 1;
-            if input == "\n" {
+            let key = term_clone.read_line().unwrap();
+            sender1.send("newline").unwrap();
+            sender2.send("newline").unwrap();
+            if key.is_empty() {
                 break;
             }
         }
-        lines
     });
 
     let timer = thread::spawn(|| {
@@ -193,12 +193,9 @@ fn main() {
     });
 
     loop {
-        if user.is_finished() {
-            let lines = user.join().unwrap();
-            clear(&term, produced_lines + lines);
-            break;
-        } else if timer.is_finished() {
-            clear(&term, produced_lines);
+        if user.is_finished() || timer.is_finished() {
+            let user_generated_lines = normal_receiver.try_iter().count();
+            clear(&term, produced_lines + user_generated_lines);
             break;
         }
     }
