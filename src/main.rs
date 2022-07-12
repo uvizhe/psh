@@ -72,21 +72,17 @@ fn get_db() -> PickleDb {
     db
 }
 
-fn get_charset(term: &Term, db: &mut PickleDb, alias: &str) -> CharSet {
+fn get_charset(db: &PickleDb, alias: &str) -> CharSet {
     let charset: CharSet;
 
     if let Some(configured) = db.get(alias) {
         charset = configured;
     } else {
-        term.write_line("Looks like you use this alias for the first time.
-Please, select preferred character set for passwords that'll be generated
-for this alias.
-Note: Standard character set consists of all printable ASCII characters
-while Reduced set includes only letters and digits."
-        ).unwrap();
-
         let sets = vec![CharSet::Standard, CharSet::Reduced];
         let charset_choice = Select::new()
+            .with_prompt("Looks like you use this alias for the first time.
+Please, select preferred character set for passwords for this alias.
+NOTE: Standard character set consists of all printable ASCII characters while Reduced set includes only letters and digits")
             .items(&vec!["Standard", "Reduced"])
             .default(0)
             .interact()
@@ -188,7 +184,7 @@ fn main() {
         };
 
     // Get saved charset for an alias or ask user if it is a new alias
-    let charset = get_charset(&term, &mut db, &alias);
+    let charset = get_charset(&db, &alias);
 
     // Ask user for secret
     let secret = Password::new()
