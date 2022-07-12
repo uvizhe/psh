@@ -4,6 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use argon2::{self, Config};
+use clap::Parser;
 use clipboard::{ClipboardProvider, ClipboardContext};
 use console::{self, Term};
 use ctrlc;
@@ -32,6 +33,22 @@ impl Theme for PshTheme {
     ) -> fmt::Result {
         write!(f, "{}: {}", prompt, "[hidden]")
     }
+}
+
+#[derive(Parser)]
+#[clap(version)]
+/// Password hasher (compute deterministic passwords from alias and secret)
+struct Cli {
+    /// Alias to use
+    alias: Option<String>,
+
+    /// Copy password into clipboard on exit (with Enter key)
+    #[clap(long)]
+    clipboard: bool,
+
+    /// Do not show full password, only first and last 3 characters
+    #[clap(long)]
+    paranoid: bool,
 }
 
 #[derive(Copy, Clone, Serialize, Deserialize)]
@@ -150,17 +167,25 @@ fn clear_password(term: &Term) {
 }
 
 fn main() {
+    let cli = Cli::parse();
+
     let theme = PshTheme;
 
     let term = Term::stdout();
 
     let mut db = get_db();
 
-    // Ask user for alias
-    let alias: String = Input::with_theme(&theme)
-        .with_prompt("Alias")
-        .interact_text()
-        .unwrap();
+    let alias =
+        if let Some(cli_alias) = cli.alias {
+            // TODO: Check for non-empty string
+            cli_alias
+        } else {
+            // Ask user for alias
+            Input::with_theme(&theme)
+                .with_prompt("Alias")
+                .interact_text()
+                .unwrap()
+        };
 
     // Get saved charset for an alias or ask user if it is a new alias
     let charset = get_charset(&term, &mut db, &alias);
@@ -178,7 +203,12 @@ fn main() {
     let password = String::from_utf8(password_slice).unwrap();
 
     // Print password to STDOUT
-    term.write_line(&password).unwrap();
+    let mut output_password = password.clone();
+    if cli.paranoid {
+        output_password.replace_range(3..13, "**********");
+    }
+
+    term.write_line(&output_password).unwrap();
 
     db.set(&alias, &charset).unwrap();
 
@@ -196,9 +226,13 @@ fn main() {
             let input = term.read_line().unwrap();
             term.clear_last_lines(1).unwrap();
             if input.is_empty() {
-                let mut clipboard: ClipboardContext = ClipboardProvider::new().unwrap();
-                clipboard.set_contents(password).unwrap();
-                thread::sleep(Duration::from_millis(1)); // Without this line clipboard contents don't set for some reason
+                if cli.clipboard {
+                    // TODO: use `x11-clipboard` instead of `clipboard`?
+                    let mut clipboard: ClipboardContext = ClipboardProvider::new().unwrap();
+                    clipboard.set_contents(password).unwrap();
+                    // Without this sleep clipboard contents don't set for some reason
+                    thread::sleep(Duration::from_millis(10));
+                }
                 break;
             }
         }
