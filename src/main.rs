@@ -1,13 +1,13 @@
+use std::fmt;
 use std::process;
 use std::thread;
 use std::time::Duration;
 
 use argon2::{self, Config};
-use async_channel::{self, Receiver};
 use clipboard::{ClipboardProvider, ClipboardContext};
 use console::{self, Term};
 use ctrlc;
-use dialoguer::{Input, Select, Password};
+use dialoguer::{Input, Select, Password, theme::Theme};
 use home::home_dir;
 use pickledb::{PickleDb, PickleDbDumpPolicy};
 use serde::{Deserialize, Serialize};
@@ -16,11 +16,23 @@ use sha2::{Sha224, Digest};
 const DB_FILE: &str = ".psh.db";
 const PASSWORD_LEN: usize = 16;
 const COLLECTED_BYTES_LEN: u32 = 64;
+const SAFEGUARD_TIMEOUT: u64 = 120;
 // TODO: Make global salt/password to add to local salt or secret (so attacker couldn't easily
 //       guess inputs).
-// TODO: Show generated password until user hits Ctrl-C to exit program (then crear password from
-//       console).
-//       Maybe even don't show full password and copy it to clipboard with Ctrl-C
+// TODO: Use `zeroize` to wipe password from memory.
+
+struct PshTheme;
+
+impl Theme for PshTheme {
+    fn format_input_prompt_selection(
+        &self,
+        f: &mut dyn fmt::Write,
+        prompt: &str,
+        _sel: &str,
+    ) -> fmt::Result {
+        write!(f, "{}: {}", prompt, "[hidden]")
+    }
+}
 
 #[derive(Copy, Clone, Serialize, Deserialize)]
 enum CharSet {
@@ -43,7 +55,7 @@ fn get_db() -> PickleDb {
     db
 }
 
-fn get_charset(term: &Term, db: &mut PickleDb, alias: &str, lines: &mut usize) -> CharSet {
+fn get_charset(term: &Term, db: &mut PickleDb, alias: &str) -> CharSet {
     let charset: CharSet;
 
     if let Some(configured) = db.get(alias) {
@@ -55,7 +67,6 @@ for this alias.
 Note: Standard character set consists of all printable ASCII characters
 while Reduced set includes only letters and digits."
         ).unwrap();
-        *lines += 5;
 
         let sets = vec![CharSet::Standard, CharSet::Reduced];
         let charset_choice = Select::new()
@@ -64,7 +75,6 @@ while Reduced set includes only letters and digits."
             .interact()
             .unwrap();
 
-        db.set(alias, &sets[charset_choice]).unwrap();
         charset = sets[charset_choice];
     }
 
@@ -73,10 +83,10 @@ while Reduced set includes only letters and digits."
 
 // Generates COLLECTED_BYTES_LEN bytes using argon2 hashing algorithm with alias and secret as inputs.
 // Alias is used for salt and is hased beforehand with SHA224 to satisfy salt minimum length.
-fn collect_bytes(alias: String, secret: String, charset: CharSet) -> Vec<u8> {
+fn collect_bytes(alias: &str, secret: &str, charset: CharSet) -> Vec<u8> {
     let mut config = Config::default();
     config.hash_length = COLLECTED_BYTES_LEN;
-    let salt = Sha224::digest(alias); // Make salt satisfy length criterium
+    let salt = Sha224::digest(alias.to_owned()); // Make salt satisfy length criterium
     let hash = argon2::hash_raw(secret.as_ref(), &salt, &config).unwrap();
 
     let mut collected_bytes = Vec::new();
@@ -135,30 +145,25 @@ fn pick_suitable_slice(collected_bytes: Vec<u8>, charset: CharSet) -> Vec<u8> {
 }
 
 // Completely clears command output on terminal
-fn clear_output(term: &Term, produced_lines: usize, receiver: &Receiver<&str>) {
-    let user_generated_lines = receiver.len();
-    let total_output_lines = produced_lines + user_generated_lines;
-    term.clear_last_lines(total_output_lines).unwrap();
-    term.show_cursor().unwrap();
+fn clear_password(term: &Term) {
+    term.clear_last_lines(1).unwrap();
 }
 
 fn main() {
-    let mut produced_lines = 3; // By default CLI produces 3 lines of output
-
-    let (sender, receiver) = async_channel::unbounded();
+    let theme = PshTheme;
 
     let term = Term::stdout();
 
     let mut db = get_db();
 
     // Ask user for alias
-    let alias: String = Input::new()
+    let alias: String = Input::with_theme(&theme)
         .with_prompt("Alias")
         .interact_text()
         .unwrap();
 
     // Get saved charset for an alias or ask user if it is a new alias
-    let charset = get_charset(&term, &mut db, &alias, &mut produced_lines);
+    let charset = get_charset(&term, &mut db, &alias);
 
     // Ask user for secret
     let secret = Password::new()
@@ -166,7 +171,7 @@ fn main() {
         .interact()
         .unwrap();
 
-    let collected_bytes = collect_bytes(alias, secret, charset);
+    let collected_bytes = collect_bytes(&alias, &secret, charset);
     // Pick password bytes to satisfy charset
     let password_slice = pick_suitable_slice(collected_bytes, charset);
 
@@ -174,23 +179,22 @@ fn main() {
 
     // Print password to STDOUT
     term.write_line(&password).unwrap();
-    term.hide_cursor().unwrap();
+
+    db.set(&alias, &charset).unwrap();
 
     // Handle Ctrl-C
     // Clear everything before exiting a program
     let term_clone = term.clone();
-    let recv_clone = receiver.clone();
     ctrlc::set_handler(move || {
-        clear_output(&term_clone, produced_lines, &recv_clone);
+        clear_password(&term_clone);
         process::exit(0);
     }).unwrap();
 
     let term_clone = term.clone();
     let user = thread::spawn(move || {
         loop {
-            let input_line = term_clone.read_line().unwrap();
-            sender.try_send("newline").unwrap();
-            if input_line.is_empty() {
+            let input = term_clone.read_char().unwrap_or('\n');
+            if input == '\n' {
                 let mut clipboard: ClipboardContext = ClipboardProvider::new().unwrap();
                 clipboard.set_contents(password).unwrap();
                 thread::sleep(Duration::from_millis(1)); // Without this line clipboard contents don't set for some reason
@@ -201,13 +205,13 @@ fn main() {
 
     // Safeguard which clears the screen if no interaction occurs in two minutes
     let timer = thread::spawn(|| {
-        thread::sleep(Duration::from_secs(120));
+        thread::sleep(Duration::from_secs(SAFEGUARD_TIMEOUT));
     });
 
     // Wait for user interaction or a safeguard activation
     loop {
         if user.is_finished() || timer.is_finished() {
-            clear_output(&term, produced_lines, &receiver);
+            clear_password(&term);
             break;
         }
     }
