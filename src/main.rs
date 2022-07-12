@@ -184,17 +184,18 @@ fn main() {
 
     // Handle Ctrl-C
     // Clear everything before exiting a program
-    let term_clone = term.clone();
-    ctrlc::set_handler(move || {
-        clear_password(&term_clone);
+    ctrlc::set_handler(|| {
+        let term = Term::stdout();
+        clear_password(&term);
         process::exit(0);
     }).unwrap();
 
-    let term_clone = term.clone();
     let user = thread::spawn(move || {
+        let term = Term::stdout();
         loop {
-            let input = term_clone.read_char().unwrap_or('\n');
-            if input == '\n' {
+            let input = term.read_line().unwrap();
+            term.clear_last_lines(1).unwrap();
+            if input.is_empty() {
                 let mut clipboard: ClipboardContext = ClipboardProvider::new().unwrap();
                 clipboard.set_contents(password).unwrap();
                 thread::sleep(Duration::from_millis(1)); // Without this line clipboard contents don't set for some reason
