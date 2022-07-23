@@ -1,9 +1,12 @@
 use std::fmt;
+use std::path::PathBuf;
 use std::process;
 use std::thread;
 use std::time::Duration;
 
+use anyhow::{bail, Context, Result};
 use argon2::{self, Config};
+use base64;
 use clap::Parser;
 use clipboard::{ClipboardProvider, ClipboardContext};
 use console::{self, Term};
@@ -12,14 +15,14 @@ use dialoguer::{Input, Select, Password, theme::Theme};
 use home::home_dir;
 use pickledb::{PickleDb, PickleDbDumpPolicy};
 use serde::{Deserialize, Serialize};
-use sha2::{Sha224, Digest};
+use sha2::{Sha256, Digest};
 
 const DB_FILE: &str = ".psh.db";
 const PASSWORD_LEN: usize = 16;
 const COLLECTED_BYTES_LEN: u32 = 64;
 const SAFEGUARD_TIMEOUT: u64 = 120;
-// TODO: Make global salt/password to add to local salt or secret (so attacker couldn't easily
-//       guess inputs).
+const MASTER_PASSWORD_MEM_COST: u32 = 64 * 1024;
+const MASTER_PASSWORD_TIME_COST: u32 = 20;
 // TODO: Use `zeroize` to wipe password from memory.
 
 struct PshTheme;
@@ -57,19 +60,80 @@ enum CharSet {
     Reduced,
 }
 
-fn get_db() -> PickleDb {
-    let db: PickleDb;
-
-    let mut db_file = home_dir().unwrap();
+fn db_file() -> PathBuf {
+    let mut db_file = home_dir()
+        .expect("User has no home directory");
     db_file.push(DB_FILE);
 
+    db_file
+}
+
+fn get_db(master_password: &str) -> Result<PickleDb> {
+    let mut db: PickleDb;
+
+    let db_file = db_file();
+    let hashed_mp = hash_master_password(master_password);
+
     if db_file.exists() {
-        db = PickleDb::load_json(db_file, PickleDbDumpPolicy::AutoDump).unwrap();
+        db = PickleDb::load_json(&db_file, PickleDbDumpPolicy::AutoDump)
+            .context(format!("Failed to open `{:?}`", db_file))?;
+        // Check if master password is correct
+        if !db.exists(&hashed_mp) {
+            bail!("Incorrect password");
+        }
     } else {
-        db = PickleDb::new_json(db_file, PickleDbDumpPolicy::AutoDump);
+        db = PickleDb::new_json(&db_file, PickleDbDumpPolicy::AutoDump);
+        // Save master password in db
+        db.set(&hashed_mp, &String::from(""))?;
     }
 
-    db
+    Ok(db)
+}
+
+fn get_master_password() -> String {
+    let term = Term::stdout();
+    let mut password_prompt = Password::new();
+    let master_password_prompt =
+        if db_file().exists() {
+            password_prompt.with_prompt("Enter master password")
+        } else {
+            term.write_line(
+                "Set master password (it's used to securely store your aliases and hash passwords)."
+            ).unwrap();
+            password_prompt.with_prompt("Enter password")
+                .with_confirmation("Repeat password", "Passwords mismatch")
+        };
+
+    let master_password = master_password_prompt
+        .interact()
+        .unwrap();
+
+    // Remove the prompt
+    if db_file().exists() {
+        term.clear_last_lines(1).unwrap();
+    } else {
+        term.clear_last_lines(3).unwrap();
+    }
+
+    master_password
+}
+
+fn hash_master_password(master_password: &str) -> String {
+    let mut argon2_config = Config::default();
+    argon2_config.mem_cost = MASTER_PASSWORD_MEM_COST;
+    argon2_config.time_cost = MASTER_PASSWORD_TIME_COST;
+    let salt = Sha256::digest(master_password.to_owned());
+    let hash = argon2::hash_raw(&[], &salt, &argon2_config)
+        .expect("Argon2 is unable to produce hash for the master password");
+    base64::encode_config(hash, base64::STANDARD_NO_PAD)
+}
+
+fn hash_alias(alias: &str, mp: &str) -> String {
+    let argon2_config = Config::default();
+    let salt = Sha256::digest(alias.to_owned()); // Make salt satisfy length criterium
+    let hash = argon2::hash_raw(mp.as_ref(), &salt, &argon2_config)
+        .expect("Argon2 is unable to produce hash for the alias");
+    base64::encode_config(hash, base64::STANDARD_NO_PAD)
 }
 
 fn get_charset(db: &PickleDb, alias: &str) -> CharSet {
@@ -95,12 +159,11 @@ NOTE: Standard character set consists of all printable ASCII characters while Re
 }
 
 // Generates COLLECTED_BYTES_LEN bytes using argon2 hashing algorithm with alias and secret as inputs.
-// Alias is used for salt and is hased beforehand with SHA224 to satisfy salt minimum length.
-fn collect_bytes(alias: &str, secret: &str, charset: CharSet) -> Vec<u8> {
-    let mut config = Config::default();
-    config.hash_length = COLLECTED_BYTES_LEN;
-    let salt = Sha224::digest(alias.to_owned()); // Make salt satisfy length criterium
-    let hash = argon2::hash_raw(secret.as_ref(), &salt, &config).unwrap();
+// Alias is used for salt and is hased beforehand with SHA256 to satisfy salt minimum length.
+fn collect_bytes(hashed_alias: &str, secret: &str, charset: CharSet) -> Vec<u8> {
+    let mut argon2_config = Config::default();
+    argon2_config.hash_length = COLLECTED_BYTES_LEN;
+    let hash = argon2::hash_raw(secret.as_ref(), hashed_alias.as_ref(), &argon2_config).unwrap();
 
     let mut collected_bytes = Vec::new();
     for byte in hash {
@@ -169,7 +232,16 @@ fn main() {
 
     let term = Term::stdout();
 
-    let mut db = get_db();
+    let (master_password, mut db) = loop {
+        // Ask user for master password
+        let master_password = get_master_password();
+
+        if let Ok(db) = get_db(&master_password) {
+            break (master_password, db);
+        } else {
+            term.write_line("Wrong master password").unwrap();
+        }
+    };
 
     let alias =
         if let Some(cli_alias) = cli.alias {
@@ -183,8 +255,10 @@ fn main() {
                 .unwrap()
         };
 
+    let hashed_alias = hash_alias(&alias, &master_password);
+
     // Get saved charset for an alias or ask user if it is a new alias
-    let charset = get_charset(&db, &alias);
+    let charset = get_charset(&db, &hashed_alias);
 
     // Ask user for secret
     let secret = Password::new()
@@ -192,7 +266,7 @@ fn main() {
         .interact()
         .unwrap();
 
-    let collected_bytes = collect_bytes(&alias, &secret, charset);
+    let collected_bytes = collect_bytes(&hashed_alias, &secret, charset);
     // Pick password bytes to satisfy charset
     let password_slice = pick_suitable_slice(collected_bytes, charset);
 
@@ -206,7 +280,7 @@ fn main() {
 
     term.write_line(&output_password).unwrap();
 
-    db.set(&alias, &charset).unwrap();
+    db.set(&hashed_alias, &charset).unwrap();
 
     // Handle Ctrl-C
     // Clear everything before exiting a program
