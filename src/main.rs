@@ -5,8 +5,10 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use argon2::{self, Config};
-use base64;
+use argon2::{
+    password_hash::{PasswordHasher, SaltString},
+    Algorithm, Argon2, ParamsBuilder, Version
+};
 use clap::Parser;
 use clipboard::{ClipboardProvider, ClipboardContext};
 use console::{self, Term};
@@ -15,14 +17,14 @@ use dialoguer::{Input, Select, Password, theme::Theme};
 use home::home_dir;
 use pickledb::{PickleDb, PickleDbDumpPolicy};
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
+use sha2::{Sha224, Digest};
 
 const DB_FILE: &str = ".psh.db";
 const PASSWORD_LEN: usize = 16;
-const COLLECTED_BYTES_LEN: u32 = 64;
+const COLLECTED_BYTES_LEN: usize = 64;
 const SAFEGUARD_TIMEOUT: u64 = 120;
 const MASTER_PASSWORD_MEM_COST: u32 = 64 * 1024;
-const MASTER_PASSWORD_TIME_COST: u32 = 20;
+const MASTER_PASSWORD_TIME_COST: u32 = 10;
 // TODO: Use `zeroize` to wipe password from memory.
 
 struct PshTheme;
@@ -119,21 +121,24 @@ fn get_master_password() -> String {
 }
 
 fn hash_master_password(master_password: &str) -> String {
-    let mut argon2_config = Config::default();
-    argon2_config.mem_cost = MASTER_PASSWORD_MEM_COST;
-    argon2_config.time_cost = MASTER_PASSWORD_TIME_COST;
-    let salt = Sha256::digest(master_password.to_owned());
-    let hash = argon2::hash_raw(&[], &salt, &argon2_config)
+    let mut argon2_params = ParamsBuilder::new();
+    argon2_params.m_cost(MASTER_PASSWORD_MEM_COST).unwrap()
+        .t_cost(MASTER_PASSWORD_TIME_COST).unwrap();
+    let argon2_params = argon2_params.params().unwrap();
+    let salt = SaltString::b64_encode(&master_password.as_ref()).unwrap();
+    let argon2 = Argon2::new(Algorithm::default(), Version::default(), argon2_params);
+    let hash = argon2.hash_password(&[], &salt)
         .expect("Argon2 is unable to produce hash for the master password");
-    base64::encode_config(hash, base64::STANDARD_NO_PAD)
+    hash.hash.unwrap().to_string()
 }
 
 fn hash_alias(alias: &str, mp: &str) -> String {
-    let argon2_config = Config::default();
-    let salt = Sha256::digest(alias.to_owned()); // Make salt satisfy length criterium
-    let hash = argon2::hash_raw(mp.as_ref(), &salt, &argon2_config)
+    let argon2 = Argon2::default();
+    let salt = Sha224::digest(alias.to_owned()); // Make salt satisfy length criterium
+    let salt = format!("{:X}", salt);
+    let hash = argon2.hash_password(mp.as_ref(), &salt)
         .expect("Argon2 is unable to produce hash for the alias");
-    base64::encode_config(hash, base64::STANDARD_NO_PAD)
+    hash.hash.unwrap().to_string()
 }
 
 fn get_charset(db: &PickleDb, alias: &str) -> CharSet {
@@ -161,14 +166,17 @@ NOTE: Standard character set consists of all printable ASCII characters while Re
 // Generates COLLECTED_BYTES_LEN bytes using argon2 hashing algorithm with alias and secret as inputs.
 // Alias is used for salt and is hased beforehand with SHA256 to satisfy salt minimum length.
 fn collect_bytes(hashed_alias: &str, secret: &str, charset: CharSet) -> Vec<u8> {
-    let mut argon2_config = Config::default();
-    argon2_config.hash_length = COLLECTED_BYTES_LEN;
-    let hash = argon2::hash_raw(secret.as_ref(), hashed_alias.as_ref(), &argon2_config).unwrap();
+    let mut argon2_params = ParamsBuilder::new();
+    argon2_params.output_len(COLLECTED_BYTES_LEN).unwrap();
+    let argon2_params = argon2_params.params().unwrap();
+    let argon2 = Argon2::new(Algorithm::default(), Version::default(), argon2_params);
+    let hash = argon2.hash_password(secret.as_ref(), hashed_alias).unwrap();
+    let hash = hash.hash.unwrap();
 
     let mut collected_bytes = Vec::new();
-    for byte in hash {
+    for byte in hash.as_bytes() {
         // ASCII has 94 printable characters (excluding space) starting from 33rd.
-        let shifted = (byte as u16) << 8;     // Shift value so it exceeds 94
+        let shifted = (*byte as u16) << 8;     // Shift value so it exceeds 94
         let pos_relative = shifted % 94;      // Find relative position of a char in between 94 values
         let pos_absolute = pos_relative + 33; // Shift it to a starting pos of "good" chars
         match charset {
