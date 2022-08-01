@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::io::Write;
 use std::path::PathBuf;
@@ -142,15 +143,17 @@ fn hash_master_password(master_password: &str) -> String {
     hash.hash.unwrap().to_string()
 }
 
-fn get_aliases(db: &PickleDb, hashed_mp: &str) -> Result<Vec<String>> {
+fn get_aliases(db: &PickleDb, hashed_mp: &str) -> Result<HashMap<String, String>> {
+    let mut aliases = HashMap::new();
     let mut enc_aliases = db.get_all();
     if let Some(nonce) = enc_aliases.iter().position(|x| x == "nonce") {
         enc_aliases.remove(nonce);
     }
-    for alias in enc_aliases.iter_mut() {
-        *alias = decrypt_alias(alias, hashed_mp)?;
+    for enc_alias in enc_aliases.iter() {
+        let alias = decrypt_alias(enc_alias, hashed_mp)?;
+        aliases.insert(alias, enc_alias.to_owned());
     }
-    Ok(enc_aliases)
+    Ok(aliases)
 }
 
 fn get_nonce(db: &PickleDb) -> u32 {
@@ -324,6 +327,7 @@ fn main() {
     };
 
     if cli.list {
+        let aliases: Vec<&str> = aliases.keys().map(|x| x.as_str()).collect();
         term.write_line(&format!("{}", aliases.join(" "))).unwrap();
         process::exit(0); // TODO: Do this with conditionals
                           // TODO: Hide the list like password
@@ -341,8 +345,14 @@ fn main() {
                 .unwrap()
         };
 
-    let nonce = get_nonce(&db);
-    let encrypted_alias = encrypt_alias(&alias, &hashed_mp, &nonce);
+    let (encrypted_alias, new_nonce) =
+        if let Some(existing) = aliases.get(&alias) {
+            (existing.to_owned(), None)
+        } else {
+            let nonce = get_nonce(&db);
+            let enc_alias = encrypt_alias(&alias, &hashed_mp, &nonce);
+            (enc_alias, Some(nonce))
+        };
 
     // Get saved charset for an alias or ask user if it is a new alias
     let charset = get_charset(&db, &encrypted_alias);
@@ -367,8 +377,10 @@ fn main() {
 
     term.write_line(&output_password).unwrap();
 
-    db.set(&encrypted_alias, &charset).unwrap();
-    db.set("nonce", &nonce).unwrap();
+    if new_nonce.is_some() {
+        db.set(&encrypted_alias, &charset).unwrap();
+        db.set("nonce", &new_nonce.unwrap()).unwrap();
+    }
 
     // Handle Ctrl-C
     // Clear everything before exiting a program
