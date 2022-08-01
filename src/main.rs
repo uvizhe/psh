@@ -11,7 +11,7 @@ use argon2::{
     password_hash::{Output, PasswordHasher, SaltString},
     Algorithm, Argon2, ParamsBuilder, Version
 };
-use clap::Parser;
+use clap::{AppSettings, ArgGroup, Parser};
 use clipboard::{ClipboardProvider, ClipboardContext};
 use console::Term;
 use dialoguer::{Input, Select, Password, theme::Theme};
@@ -47,17 +47,28 @@ impl Theme for PshTheme {
 
 #[derive(Parser)]
 #[clap(version)]
+#[clap(global_setting(AppSettings::DeriveDisplayOrder))]
+#[clap(group(
+            ArgGroup::new("interactive")
+                .args(&["alias", "clipboard", "paranoid"])
+                .multiple(true)
+                .conflicts_with("list"),
+        ))]
 /// Password hasher (compute deterministic passwords from alias and secret)
 struct Cli {
     /// Alias to use
     alias: Option<String>,
 
+    /// List all aliases stored in database
+    #[clap(short, long)]
+    list: bool,
+
     /// Copy password into clipboard on exit (with Enter key)
-    #[clap(long)]
+    #[clap(short, long)]
     clipboard: bool,
 
     /// Do not show full password, only first and last 3 characters
-    #[clap(long)]
+    #[clap(short, long)]
     paranoid: bool,
 }
 
@@ -311,7 +322,12 @@ fn main() {
             term.write_line("Wrong master password").unwrap();
         }
     };
-    println!("{:?}", aliases);
+
+    if cli.list {
+        term.write_line(&format!("{}", aliases.join(" "))).unwrap();
+        process::exit(0); // TODO: Do this with conditionals
+                          // TODO: Hide the list like password
+    }
 
     let alias =
         if let Some(cli_alias) = cli.alias {
