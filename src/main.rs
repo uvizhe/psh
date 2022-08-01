@@ -1,23 +1,24 @@
 use std::fmt;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process;
 use std::thread;
 use std::time::Duration;
 
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use anyhow::{bail, Context, Result};
 use argon2::{
-    password_hash::{PasswordHasher, SaltString},
+    password_hash::{Output, PasswordHasher, SaltString},
     Algorithm, Argon2, ParamsBuilder, Version
 };
 use clap::Parser;
 use clipboard::{ClipboardProvider, ClipboardContext};
-use console::{self, Term};
-use ctrlc;
+use console::Term;
 use dialoguer::{Input, Select, Password, theme::Theme};
 use home::home_dir;
 use pickledb::{PickleDb, PickleDbDumpPolicy};
 use serde::{Deserialize, Serialize};
-use sha2::{Sha224, Digest};
+use sha2::{Digest, Sha256};
 
 const DB_FILE: &str = ".psh.db";
 const PASSWORD_LEN: usize = 16;
@@ -25,7 +26,11 @@ const COLLECTED_BYTES_LEN: usize = 64;
 const SAFEGUARD_TIMEOUT: u64 = 120;
 const MASTER_PASSWORD_MEM_COST: u32 = 64 * 1024;
 const MASTER_PASSWORD_TIME_COST: u32 = 10;
+
 // TODO: Use `zeroize` to wipe password from memory.
+
+type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
+type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 
 struct PshTheme;
 
@@ -70,23 +75,15 @@ fn db_file() -> PathBuf {
     db_file
 }
 
-fn get_db(master_password: &str) -> Result<PickleDb> {
-    let mut db: PickleDb;
+fn get_db() -> Result<PickleDb> {
+    let db: PickleDb;
 
     let db_file = db_file();
-    let hashed_mp = hash_master_password(master_password);
-
     if db_file.exists() {
         db = PickleDb::load_json(&db_file, PickleDbDumpPolicy::AutoDump)
             .context(format!("Failed to open `{:?}`", db_file))?;
-        // Check if master password is correct
-        if !db.exists(&hashed_mp) {
-            bail!("Incorrect password");
-        }
     } else {
         db = PickleDb::new_json(&db_file, PickleDbDumpPolicy::AutoDump);
-        // Save master password in db
-        db.set(&hashed_mp, &String::from(""))?;
     }
 
     Ok(db)
@@ -110,6 +107,8 @@ fn get_master_password() -> String {
         .interact()
         .unwrap();
 
+    assert!(master_password.len() >= 8);
+
     // Remove the prompt
     if db_file().exists() {
         term.clear_last_lines(1).unwrap();
@@ -117,7 +116,7 @@ fn get_master_password() -> String {
         term.clear_last_lines(3).unwrap();
     }
 
-    master_password
+    hash_master_password(&master_password)
 }
 
 fn hash_master_password(master_password: &str) -> String {
@@ -132,13 +131,73 @@ fn hash_master_password(master_password: &str) -> String {
     hash.hash.unwrap().to_string()
 }
 
-fn hash_alias(alias: &str, mp: &str) -> String {
-    let argon2 = Argon2::default();
-    let salt = Sha224::digest(alias.to_owned()); // Make salt satisfy length criterium
-    let salt = format!("{:X}", salt);
-    let hash = argon2.hash_password(mp.as_ref(), &salt)
-        .expect("Argon2 is unable to produce hash for the alias");
-    hash.hash.unwrap().to_string()
+fn get_aliases(db: &PickleDb, hashed_mp: &str) -> Result<Vec<String>> {
+    let mut enc_aliases = db.get_all();
+    if let Some(nonce) = enc_aliases.iter().position(|x| x == "nonce") {
+        enc_aliases.remove(nonce);
+    }
+    for alias in enc_aliases.iter_mut() {
+        *alias = decrypt_alias(alias, hashed_mp)?;
+    }
+    Ok(enc_aliases)
+}
+
+fn get_nonce(db: &PickleDb) -> u32 {
+    if let Some(nonce) = db.get::<u32>("nonce") {
+        nonce + 1
+    } else {
+        0
+    }
+}
+
+fn pad_to_30_bytes(string: &str) -> [u8; 30] {
+    assert!(string.len() <= 30);
+    let mut padded: [u8; 30] = [0; 30];
+    let mut bytes = string.as_bytes().to_vec();
+    bytes.reverse();
+    padded.as_mut_slice().write(&bytes).unwrap();
+    padded.reverse();
+    padded
+}
+
+fn encrypt_alias(alias: &str, hashed_mp: &str, nonce: &u32) -> String {
+    let padded_alias = pad_to_30_bytes(&alias);
+    let salt = hashed_mp.to_owned() + &nonce.to_string();
+    let salt = Sha256::digest(salt);
+    // In AES128 key size and iv size are the same, 16 bytes, half of SHA256
+    let (key, iv) = salt.split_at(16);
+    let mut buf = [0u8; 32];
+    let enc = Aes128CbcEnc::new(key.into(), iv.into())
+        .encrypt_padded_b2b_mut::<Pkcs7>(&padded_alias, &mut buf)
+        .unwrap();
+    let enc = &[nonce.to_le_bytes().as_slice(), enc].concat();
+    let enc = Output::new(enc).unwrap();
+    enc.to_string()
+}
+
+fn decrypt_alias(alias: &str, hashed_mp: &str) -> Result<String> {
+    let alias =
+        if let Ok(alias) = Output::b64_decode(&alias) {
+            alias
+        } else {
+            bail!("Unable to read DB entry `{}`", alias)
+        };
+    let nonce: [u8; 4] = alias.as_bytes()[0..4].try_into()?;
+    let nonce = u32::from_le_bytes(nonce);
+    let salt = hashed_mp.to_owned() + &nonce.to_string();
+    let salt = Sha256::digest(salt);
+    // In AES128 key size and iv size are the same, 16 bytes, half of SHA256
+    let (key, iv) = salt.split_at(16);
+    let mut buf = [0u8; 32];
+    if let Ok(dec) = Aes128CbcDec::new(key.into(), iv.into())
+        .decrypt_padded_b2b_mut::<Pkcs7>(&alias.as_bytes()[4..], &mut buf)
+    {
+        let alias_bytes: Vec<u8> = dec.iter().filter(|x| **x != 0).map(|&x| x).collect();
+        assert!(alias_bytes.is_ascii());
+        Ok(String::from_utf8(alias_bytes)?)
+    } else {
+        bail!("Unable to decrypt DB entry `{}`", alias)
+    }
 }
 
 fn get_charset(db: &PickleDb, alias: &str) -> CharSet {
@@ -240,16 +299,19 @@ fn main() {
 
     let term = Term::stdout();
 
-    let (master_password, mut db) = loop {
-        // Ask user for master password
-        let master_password = get_master_password();
+    let mut db = get_db().unwrap();
 
-        if let Ok(db) = get_db(&master_password) {
-            break (master_password, db);
+    let (hashed_mp, aliases) = loop {
+        // Ask user for master password
+        let hashed_mp = get_master_password();
+
+        if let Ok(aliases) = get_aliases(&db, &hashed_mp) {
+            break (hashed_mp, aliases);
         } else {
             term.write_line("Wrong master password").unwrap();
         }
     };
+    println!("{:?}", aliases);
 
     let alias =
         if let Some(cli_alias) = cli.alias {
@@ -263,10 +325,11 @@ fn main() {
                 .unwrap()
         };
 
-    let hashed_alias = hash_alias(&alias, &master_password);
+    let nonce = get_nonce(&db);
+    let encrypted_alias = encrypt_alias(&alias, &hashed_mp, &nonce);
 
     // Get saved charset for an alias or ask user if it is a new alias
-    let charset = get_charset(&db, &hashed_alias);
+    let charset = get_charset(&db, &encrypted_alias);
 
     // Ask user for secret
     let secret = Password::new()
@@ -274,7 +337,7 @@ fn main() {
         .interact()
         .unwrap();
 
-    let collected_bytes = collect_bytes(&hashed_alias, &secret, charset);
+    let collected_bytes = collect_bytes(&encrypted_alias, &secret, charset);
     // Pick password bytes to satisfy charset
     let password_slice = pick_suitable_slice(collected_bytes, charset);
 
@@ -288,7 +351,8 @@ fn main() {
 
     term.write_line(&output_password).unwrap();
 
-    db.set(&hashed_alias, &charset).unwrap();
+    db.set(&encrypted_alias, &charset).unwrap();
+    db.set("nonce", &nonce).unwrap();
 
     // Handle Ctrl-C
     // Clear everything before exiting a program
