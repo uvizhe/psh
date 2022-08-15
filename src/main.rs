@@ -39,6 +39,7 @@ impl Theme for PshTheme {
 /// Password hasher (compute deterministic passwords from alias and secret)
 struct Cli {
     /// Alias to use
+    #[clap(value_parser = trim_string)]
     alias: Option<String>,
 
     /// List all aliases stored in database
@@ -52,6 +53,14 @@ struct Cli {
     /// Do not show full password, only first and last 3 characters
     #[clap(short, long)]
     paranoid: bool,
+}
+
+fn trim_string(value: &str) -> Result<String, String> {
+    if value.trim().is_empty() {
+        Err("Empty string".to_string())
+    } else {
+        Ok(value.to_string())
+    }
 }
 
 fn get_or_set_master_password() -> String {
@@ -76,14 +85,27 @@ fn get_or_set_master_password() -> String {
         .interact()
         .unwrap();
 
-    // Remove the prompt
-    if db_file().exists() {
-        term.clear_last_lines(1).unwrap();
-    } else {
-        term.clear_last_lines(3).unwrap();
-    }
-
     master_password
+}
+
+fn get_alias() -> String {
+    let theme = PshTheme;
+
+    let alias = Input::with_theme(&theme)
+        .with_prompt("Alias")
+        .validate_with(|input: &String| {
+            if input.trim().is_empty() {
+                Err("Alias cannot be empty")
+            } else {
+                Ok(())
+            }
+        })
+        .interact_text()
+        .unwrap();
+
+    alias
+        .trim()
+        .to_string()
 }
 
 fn get_charset() -> CharSet {
@@ -104,6 +126,39 @@ NOTE: Standard character set consists of all printable ASCII characters while Re
     charset
 }
 
+fn get_secret() -> String {
+    Password::new()
+            .with_prompt("Secret")
+            .interact()
+            .unwrap()
+}
+
+fn print_aliases(psh: &Psh) {
+    let aliases: Vec<&str> = psh.aliases().iter().map(|x| x.as_str()).collect();
+    let term = Term::stdout();
+    term.write_line(&format!("{}", aliases.join(" "))).unwrap();
+}
+
+fn spawn_user_thread(password: String, use_clipboard: bool) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let term = Term::stdout();
+        loop {
+            let input = term.read_line().unwrap();
+            term.clear_last_lines(1).unwrap();
+            if input.is_empty() {
+                if use_clipboard {
+                    // TODO: use `x11-clipboard` instead of `clipboard`?
+                    let mut clipboard: ClipboardContext = ClipboardProvider::new().unwrap();
+                    clipboard.set_contents(password).unwrap();
+                    // Without this sleep clipboard contents don't set for some reason
+                    thread::sleep(Duration::from_millis(10));
+                }
+                break;
+            }
+        }
+    })
+}
+
 // Completely clears command output on terminal
 fn clear_password(term: &Term) {
     term.clear_last_lines(1).unwrap();
@@ -112,7 +167,6 @@ fn clear_password(term: &Term) {
 fn main() {
     let cli = Cli::parse();
     let term = Term::stdout();
-    let theme = PshTheme;
 
     let master_password = get_or_set_master_password();
 
@@ -126,25 +180,18 @@ fn main() {
     };
 
     if cli.list {
-        let aliases: Vec<&str> = psh.aliases().iter().map(|x| x.as_str()).collect();
-        term.write_line(&format!("{}", aliases.join(" "))).unwrap();
-        return;
         // TODO: Hide the list like password
+        print_aliases(&psh);
+        return;
     }
 
     let alias =
         if let Some(cli_alias) = cli.alias {
-            // TODO: Check for non-empty string
             cli_alias
         } else {
-            // Ask user for alias
-            Input::with_theme(&theme)
-                .with_prompt("Alias")
-                .interact_text()
-                .unwrap()
+            get_alias()
         };
 
-    // Get saved charset for an alias or ask user if it is a new alias
     let charset =
         if psh.alias_is_known(&alias) {
             psh.get_charset(&alias).unwrap()
@@ -152,11 +199,7 @@ fn main() {
             get_charset()
         };
 
-    // Ask user for secret
-    let secret = Password::new()
-        .with_prompt("Secret")
-        .interact()
-        .unwrap();
+    let secret = get_secret();
 
     let password = psh.construct_password(&alias, &secret, Some(charset));
 
@@ -178,26 +221,9 @@ fn main() {
         let term = Term::stdout();
         clear_password(&term);
         process::exit(0);
-    }).unwrap();
+    }).expect("Error setting Ctrl-C handler");
 
-    let user = thread::spawn(move || {
-        let term = Term::stdout();
-        loop {
-            let input = term.read_line().unwrap();
-            term.clear_last_lines(1).unwrap();
-            if input.is_empty() {
-                if cli.clipboard {
-                    // TODO: use `x11-clipboard` instead of `clipboard`?
-                    let mut clipboard: ClipboardContext = ClipboardProvider::new().unwrap();
-                    clipboard.set_contents(password).unwrap();
-                    // Without this sleep clipboard contents don't set for some reason
-                    thread::sleep(Duration::from_millis(10));
-                }
-                break;
-            }
-        }
-    });
-
+    let user = spawn_user_thread(password, cli.clipboard);
     // Safeguard which clears the screen if no interaction occurs in two minutes
     let timer = thread::spawn(|| {
         thread::sleep(Duration::from_secs(SAFEGUARD_TIMEOUT));
