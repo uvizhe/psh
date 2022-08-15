@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -14,6 +12,7 @@ use once_cell::unsync::OnceCell;
 use pickledb::{PickleDb, PickleDbDumpPolicy};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use thiserror::Error;
 
 const DB_FILE: &str = ".psh.db";
 const PASSWORD_LEN: usize = 16;
@@ -47,6 +46,9 @@ fn get_db() -> Result<PickleDb> {
 }
 
 fn hash_master_password(master_password: &str) -> Result<String> {
+    if master_password.len() < 8 {
+        bail!(PshError::MasterPasswordTooShort);
+    }
     let mut argon2_params = ParamsBuilder::new();
     argon2_params.m_cost(MASTER_PASSWORD_MEM_COST).unwrap()
         .t_cost(MASTER_PASSWORD_TIME_COST).unwrap();
@@ -314,7 +316,7 @@ impl AliasData {
                 assert!(alias_bytes.is_ascii());
                 Ok(String::from_utf8(alias_bytes)?)
             }
-            Err(error) => bail!(PshError),
+            Err(_) => bail!(PshError::WrongMasterPassword),
         }
     }
 }
@@ -325,13 +327,10 @@ pub enum CharSet {
     Reduced,
 }
 
-#[derive(Debug)]
-pub struct PshError;
-
-impl fmt::Display for PshError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PshError")
-    }
+#[derive(Error, Debug)]
+pub enum PshError {
+    #[error("Master password is too short (less than 8 chars)")]
+    MasterPasswordTooShort,
+    #[error("Wrong master password")]
+    WrongMasterPassword,
 }
-
-impl Error for PshError {}

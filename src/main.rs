@@ -8,7 +8,7 @@ use clipboard::{ClipboardProvider, ClipboardContext};
 use console::Term;
 use dialoguer::{Input, Select, Password, theme::Theme};
 
-use psh::{Psh, PshError, CharSet, db_file};
+use psh::{Psh, CharSet, db_file};
 
 const SAFEGUARD_TIMEOUT: u64 = 120;
 
@@ -54,7 +54,7 @@ struct Cli {
     paranoid: bool,
 }
 
-fn get_master_password() -> String {
+fn get_or_set_master_password() -> String {
     let term = Term::stdout();
     let mut password_prompt = Password::new();
     let master_password_prompt =
@@ -62,7 +62,7 @@ fn get_master_password() -> String {
             password_prompt.with_prompt("Enter master password")
         } else {
             term.write_line(
-                "Set master password (it's used to securely store your aliases and hash passwords)."
+                "Set master password, 8 characters minimum (it's used to securely store your aliases and hash passwords)."
             ).unwrap();
             password_prompt.with_prompt("Enter password")
                 .with_confirmation("Repeat password", "Passwords mismatch")
@@ -71,8 +71,6 @@ fn get_master_password() -> String {
     let master_password = master_password_prompt
         .interact()
         .unwrap();
-
-    assert!(master_password.len() >= 8);
 
     // Remove the prompt
     if db_file().exists() {
@@ -112,16 +110,13 @@ fn main() {
     let term = Term::stdout();
     let theme = PshTheme;
 
-    let master_password = get_master_password();
+    let master_password = get_or_set_master_password();
 
     let mut psh = match Psh::new(&master_password) {
         Ok(psh) => psh,
         Err(error) => {
-            if error.is::<PshError>() {
-                term.write_line("Wrong master password").unwrap();
-            } else {
-                term.write_line(&format!("Something went wrong: {}", error)).unwrap();
-            }
+            term.write_line(&error.to_string())
+                .expect("Unable to write to terminal");
             return;
         }
     };
@@ -129,8 +124,8 @@ fn main() {
     if cli.list {
         let aliases: Vec<&str> = psh.aliases().iter().map(|x| x.as_str()).collect();
         term.write_line(&format!("{}", aliases.join(" "))).unwrap();
-        process::exit(0); // TODO: Do this with conditionals
-                          // TODO: Hide the list like password
+        return;
+        // TODO: Hide the list like password
     }
 
     let alias =
