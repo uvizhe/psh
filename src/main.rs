@@ -134,34 +134,53 @@ fn get_secret() -> String {
 }
 
 fn print_aliases(psh: &Psh) {
+    // TODO: Clear terminal after SAFEGUARD_TIMEOUT
     let aliases: Vec<&str> = psh.aliases().iter().map(|x| x.as_str()).collect();
     let term = Term::stdout();
-    term.write_line(&format!("{}", aliases.join(" "))).unwrap();
+    term.write_line(&format!("Previously used aliases: {}", aliases.join(" "))).unwrap();
+    term.write_line("Hit Enter to exit").unwrap();
+
+    // Handle Ctrl-C
+    // Clear last lines (with aliases) before exiting
+    ctrlc::set_handler(|| {
+        let term = Term::stdout();
+        term.clear_last_lines(2).unwrap();
+        process::exit(0);
+    }).expect("Error setting Ctrl-C handler");
+
+    loop {
+        let input = term.read_line().unwrap();
+        term.clear_last_lines(1).unwrap();
+        if input.is_empty() {
+            // Clear last lines (with aliases) before exiting
+            term.clear_last_lines(2).unwrap();
+            return;
+        }
+    }
 }
 
 fn spawn_user_thread(password: String, use_clipboard: bool) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let term = Term::stdout();
+        term.write_line("Hit Enter to exit").unwrap();
+
         loop {
             let input = term.read_line().unwrap();
             term.clear_last_lines(1).unwrap();
             if input.is_empty() {
                 if use_clipboard {
                     // TODO: use `x11-clipboard` instead of `clipboard`?
-                    let mut clipboard: ClipboardContext = ClipboardProvider::new().unwrap();
-                    clipboard.set_contents(password).unwrap();
-                    // Without this sleep clipboard contents don't set for some reason
+                    let mut clipboard: ClipboardContext = ClipboardProvider::new()
+                        .expect("Error getting clipboard provider");
+                    clipboard.set_contents(password)
+                        .expect("Error setting clipboard contents");
+                    // XXX: Without this sleep clipboard contents don't set for some reason
                     thread::sleep(Duration::from_millis(10));
                 }
-                break;
+                return;
             }
         }
     })
-}
-
-// Completely clears command output on terminal
-fn clear_password(term: &Term) {
-    term.clear_last_lines(1).unwrap();
 }
 
 fn main() {
@@ -180,7 +199,6 @@ fn main() {
     };
 
     if cli.list {
-        // TODO: Hide the list like password
         print_aliases(&psh);
         return;
     }
@@ -216,10 +234,10 @@ fn main() {
     }
 
     // Handle Ctrl-C
-    // Clear everything before exiting a program
+    // Clear last lines (with password) before exiting
     ctrlc::set_handler(|| {
         let term = Term::stdout();
-        clear_password(&term);
+        term.clear_last_lines(2).unwrap();
         process::exit(0);
     }).expect("Error setting Ctrl-C handler");
 
@@ -232,8 +250,9 @@ fn main() {
     // Wait for user interaction or a safeguard activation
     loop {
         if user.is_finished() || timer.is_finished() {
-            clear_password(&term);
-            break;
+            // Clear last lines (with password) before exiting
+            term.clear_last_lines(2).unwrap();
+            return;
         }
     }
 }
