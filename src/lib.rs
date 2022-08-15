@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -312,7 +314,7 @@ impl AliasData {
                 assert!(alias_bytes.is_ascii());
                 Ok(String::from_utf8(alias_bytes)?)
             }
-            Err(error) => bail!("Unable to decrypt alias: {:?}", error)
+            Err(error) => bail!(PshError),
         }
     }
 }
@@ -322,3 +324,14 @@ pub enum CharSet {
     Standard,
     Reduced,
 }
+
+#[derive(Debug)]
+pub struct PshError;
+
+impl fmt::Display for PshError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PshError")
+    }
+}
+
+impl Error for PshError {}

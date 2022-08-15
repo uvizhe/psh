@@ -8,7 +8,7 @@ use clipboard::{ClipboardProvider, ClipboardContext};
 use console::Term;
 use dialoguer::{Input, Select, Password, theme::Theme};
 
-use psh::{Psh, CharSet, db_file};
+use psh::{Psh, PshError, CharSet, db_file};
 
 const SAFEGUARD_TIMEOUT: u64 = 120;
 
@@ -109,19 +109,20 @@ fn clear_password(term: &Term) {
 
 fn main() {
     let cli = Cli::parse();
-
+    let term = Term::stdout();
     let theme = PshTheme;
 
-    let term = Term::stdout();
+    let master_password = get_master_password();
 
-    let mut psh = loop {
-        // Ask user for master password
-        let master_password = get_master_password();
-
-        if let Ok(psh) = Psh::new(&master_password) {
-            break psh;
-        } else {
-            term.write_line("Wrong master password").unwrap();
+    let mut psh = match Psh::new(&master_password) {
+        Ok(psh) => psh,
+        Err(error) => {
+            if error.is::<PshError>() {
+                term.write_line("Wrong master password").unwrap();
+            } else {
+                term.write_line(&format!("Something went wrong: {}", error)).unwrap();
+            }
+            return;
         }
     };
 
