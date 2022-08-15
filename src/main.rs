@@ -8,7 +8,7 @@ use clipboard::{ClipboardProvider, ClipboardContext};
 use console::Term;
 use dialoguer::{Input, Select, Password, theme::Theme};
 
-use psh::{Psh, CharSet, db_file};
+use psh::{Psh, CharSet, db_file, MASTER_PASSWORD_MIN_LEN};
 
 const SAFEGUARD_TIMEOUT: u64 = 120;
 
@@ -62,9 +62,13 @@ fn get_or_set_master_password() -> String {
             password_prompt.with_prompt("Enter master password")
         } else {
             term.write_line(
-                "Set master password, 8 characters minimum (it's used to securely store your aliases and hash passwords)."
-            ).unwrap();
-            password_prompt.with_prompt("Enter password")
+                "Set master password (it's used to securely store your aliases and hash passwords).")
+            .unwrap();
+            password_prompt
+                .with_prompt(
+                    &format!(
+                        "Enter password, {} characters minimum",
+                        MASTER_PASSWORD_MIN_LEN))
                 .with_confirmation("Repeat password", "Passwords mismatch")
         };
 

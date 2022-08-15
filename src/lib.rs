@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+pub const MASTER_PASSWORD_MIN_LEN: usize = 8;
 const DB_FILE: &str = ".psh.db";
 const PASSWORD_LEN: usize = 16;
 const COLLECTED_BYTES_LEN: usize = 64;
@@ -46,7 +47,7 @@ fn get_db() -> Result<PickleDb> {
 }
 
 fn hash_master_password(master_password: &str) -> Result<String> {
-    if master_password.len() < 8 {
+    if master_password.len() < MASTER_PASSWORD_MIN_LEN {
         bail!(PshError::MasterPasswordTooShort);
     }
     let mut argon2_params = ParamsBuilder::new();
@@ -86,8 +87,8 @@ pub struct Psh {
 
 impl Psh {
     pub fn new(master_password: &str) -> Result<Self> {
-        let db = get_db()?;
         let hashed_mp = hash_master_password(master_password)?;
+        let db = get_db()?;
         let aliases = get_aliases(&db, &hashed_mp)?;
 
         let psh = Self {
@@ -329,7 +330,7 @@ pub enum CharSet {
 
 #[derive(Error, Debug)]
 pub enum PshError {
-    #[error("Master password is too short (less than 8 chars)")]
+    #[error("Master password is too short (less than {} chars)", MASTER_PASSWORD_MIN_LEN)]
     MasterPasswordTooShort,
     #[error("Wrong master password")]
     WrongMasterPassword,
