@@ -134,53 +134,44 @@ fn get_secret() -> String {
 }
 
 fn print_aliases(psh: &Psh) {
-    // TODO: Clear terminal after SAFEGUARD_TIMEOUT
     let aliases: Vec<&str> = psh.aliases().iter().map(|x| x.as_str()).collect();
     let term = Term::stdout();
     term.write_line(&format!("Previously used aliases: {}", aliases.join(" "))).unwrap();
-    term.write_line("Hit Enter to exit").unwrap();
+}
 
+fn cleanup_on_enter_or_timeout<F>(f: F)
+    where F: Fn()
+{
     // Handle Ctrl-C
-    // Clear last lines (with aliases) before exiting
+    // Clear last lines (with password/aliases) before exiting
     ctrlc::set_handler(|| {
         let term = Term::stdout();
         term.clear_last_lines(2).unwrap();
         process::exit(0);
     }).expect("Error setting Ctrl-C handler");
 
-    loop {
-        let input = term.read_line().unwrap();
+    // Safeguard which clears the screen if no interaction occurs in two minutes
+    let timer = thread::spawn(|| {
+        thread::sleep(Duration::from_secs(SAFEGUARD_TIMEOUT));
+    });
+
+    let prompt = thread::spawn(|| {
+        let term = Term::stdout();
+        term.write_line("Hit Enter to exit").unwrap();
+        term.read_line().unwrap();
         term.clear_last_lines(1).unwrap();
-        if input.is_empty() {
-            // Clear last lines (with aliases) before exiting
+    });
+
+    // Wait for user interaction or a safeguard activation
+    loop {
+        if prompt.is_finished() || timer.is_finished() {
+            f();
+            // Clear last lines (with password/aliases) before exiting
+            let term = Term::stdout();
             term.clear_last_lines(2).unwrap();
             return;
         }
     }
-}
-
-fn spawn_user_thread(password: String, use_clipboard: bool) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        let term = Term::stdout();
-        term.write_line("Hit Enter to exit").unwrap();
-
-        loop {
-            let input = term.read_line().unwrap();
-            term.clear_last_lines(1).unwrap();
-            if input.is_empty() {
-                if use_clipboard {
-                    // TODO: use `x11-clipboard` instead of `clipboard`?
-                    let mut clipboard: ClipboardContext = ClipboardProvider::new()
-                        .expect("Error getting clipboard provider");
-                    clipboard.set_contents(password)
-                        .expect("Error setting clipboard contents");
-                    // XXX: Without this sleep clipboard contents don't set for some reason
-                    thread::sleep(Duration::from_millis(10));
-                }
-                return;
-            }
-        }
-    })
 }
 
 fn main() {
@@ -200,59 +191,48 @@ fn main() {
 
     if cli.list {
         print_aliases(&psh);
-        return;
-    }
+        cleanup_on_enter_or_timeout(|| {});
+    } else {
+        let alias =
+            if let Some(cli_alias) = cli.alias {
+                cli_alias
+            } else {
+                get_alias()
+            };
 
-    let alias =
-        if let Some(cli_alias) = cli.alias {
-            cli_alias
-        } else {
-            get_alias()
-        };
+        let charset =
+            if psh.alias_is_known(&alias) {
+                psh.get_charset(&alias).unwrap()
+            } else {
+                get_charset()
+            };
 
-    let charset =
-        if psh.alias_is_known(&alias) {
-            psh.get_charset(&alias).unwrap()
-        } else {
-            get_charset()
-        };
+        let secret = get_secret();
 
-    let secret = get_secret();
+        let password = psh.construct_password(&alias, &secret, Some(charset));
 
-    let password = psh.construct_password(&alias, &secret, Some(charset));
-
-    // Print password to STDOUT
-    let mut output_password = password.clone();
-    if cli.paranoid {
-        output_password.replace_range(3..13, "**********");
-    }
-
-    term.write_line(&output_password).unwrap();
-
-    if !psh.alias_is_known(&alias) {
-        psh.write_alias_data_to_db().unwrap();
-    }
-
-    // Handle Ctrl-C
-    // Clear last lines (with password) before exiting
-    ctrlc::set_handler(|| {
-        let term = Term::stdout();
-        term.clear_last_lines(2).unwrap();
-        process::exit(0);
-    }).expect("Error setting Ctrl-C handler");
-
-    let user = spawn_user_thread(password, cli.clipboard);
-    // Safeguard which clears the screen if no interaction occurs in two minutes
-    let timer = thread::spawn(|| {
-        thread::sleep(Duration::from_secs(SAFEGUARD_TIMEOUT));
-    });
-
-    // Wait for user interaction or a safeguard activation
-    loop {
-        if user.is_finished() || timer.is_finished() {
-            // Clear last lines (with password) before exiting
-            term.clear_last_lines(2).unwrap();
-            return;
+        // Print password to STDOUT
+        let mut output_password = password.clone();
+        if cli.paranoid {
+            output_password.replace_range(3..13, "**********");
         }
+
+        term.write_line(&output_password).unwrap();
+
+        if !psh.alias_is_known(&alias) {
+            psh.write_alias_data_to_db().unwrap();
+        }
+
+        cleanup_on_enter_or_timeout(|| {
+            if cli.clipboard {
+                // TODO: use `x11-clipboard` instead of `clipboard`?
+                let mut clipboard: ClipboardContext = ClipboardProvider::new()
+                    .expect("Error getting clipboard provider");
+                clipboard.set_contents(password.clone())
+                    .expect("Error setting clipboard contents");
+                // XXX: Without this sleep clipboard contents don't set for some reason
+                thread::sleep(Duration::from_millis(10));
+            }
+        });
     }
 }
