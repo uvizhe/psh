@@ -472,17 +472,24 @@ dependencies = [
  "anyhow",
  "argon2",
  "cbc",
- "clap",
- "clipboard",
- "console",
- "ctrlc",
- "dialoguer",
  "home",
  "once_cell",
  "pickledb",
  "serde",
  "sha2",
  "thiserror",
+]
+
+[[package]]
+name = "psh-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "clipboard",
+ "console",
+ "ctrlc",
+ "dialoguer",
+ "psh",
 ]
 
 [[package]]
