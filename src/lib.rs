@@ -13,19 +13,6 @@ const SAFEGUARD_TIMEOUT: u64 = 120;
 
 // TODO: Use `zeroize` to wipe password from memory.
 
-struct PshTheme;
-
-impl Theme for PshTheme {
-    fn format_input_prompt_selection(
-        &self,
-        f: &mut dyn fmt::Write,
-        prompt: &str,
-        _sel: &str,
-    ) -> fmt::Result {
-        write!(f, "{}: {}", prompt, "[hidden]")
-    }
-}
-
 #[derive(Parser)]
 #[clap(version)]
 #[clap(global_setting(AppSettings::DeriveDisplayOrder))]
@@ -62,16 +49,30 @@ fn trim_string(value: &str) -> Result<String, String> {
     }
 }
 
-pub fn get_or_set_master_password() -> String {
-    let term = Term::stdout();
+struct PshTheme;
+
+impl Theme for PshTheme {
+    fn format_input_prompt_selection(
+        &self,
+        f: &mut dyn fmt::Write,
+        prompt: &str,
+        _sel: &str,
+    ) -> fmt::Result {
+        write!(f, "{}: {}", prompt, "[hidden]")
+    }
+}
+
+pub fn prompt_master_password() -> String {
     let mut password_prompt = Password::new();
     let master_password_prompt =
         if db_file().exists() {
             password_prompt.with_prompt("Enter master password")
         } else {
+            let term = Term::stdout();
             term.write_line(
                 "Set master password (it's used to securely store your aliases and hash passwords).")
             .unwrap();
+
             password_prompt
                 .with_prompt(
                     &format!(
@@ -87,7 +88,7 @@ pub fn get_or_set_master_password() -> String {
     master_password
 }
 
-pub fn get_alias() -> String {
+pub fn prompt_alias() -> String {
     let theme = PshTheme;
 
     let alias = Input::with_theme(&theme)
@@ -107,11 +108,11 @@ pub fn get_alias() -> String {
         .to_string()
 }
 
-pub fn get_charset() -> CharSet {
+pub fn prompt_charset() -> CharSet {
     let charset: CharSet;
-
     let sets = vec![CharSet::Standard, CharSet::Reduced];
-    let charset_choice = Select::new()
+
+    let choice = Select::new()
         .with_prompt("Looks like you use this alias for the first time.
 Please, select preferred character set for passwords for this alias.
 NOTE: Standard character set consists of all printable ASCII characters while Reduced set includes only letters and digits")
@@ -120,36 +121,43 @@ NOTE: Standard character set consists of all printable ASCII characters while Re
         .interact()
         .unwrap();
 
-    charset = sets[charset_choice];
+    charset = sets[choice];
 
     charset
 }
 
-pub fn get_secret() -> String {
+pub fn prompt_secret() -> String {
     Password::new()
-            .with_prompt("Secret")
-            .interact()
-            .unwrap()
+        .with_prompt("Secret")
+        .interact()
+        .unwrap()
 }
 
 pub fn print_aliases(psh: &Psh) {
-    let aliases: Vec<&str> = psh.aliases().iter().map(|x| x.as_str()).collect();
     let term = Term::stdout();
+    let aliases: Vec<&str> = psh.aliases()
+        .iter()
+        .map(|x| x.as_str())
+        .collect();
     term.write_line(&format!("Previously used aliases: {}", aliases.join(" "))).unwrap();
 }
 
-pub fn cleanup_on_enter_or_timeout<F>(f: F)
+pub fn before_cleanup_on_enter_or_timeout<F>(f: F)
     where F: Fn()
 {
-    // Handle Ctrl-C
     // Clear last lines (with password/aliases) before exiting
-    ctrlc::set_handler(|| {
+    let cleanup = || {
         let term = Term::stdout();
         term.clear_last_lines(2).unwrap();
+    };
+
+    // Handle Ctrl-C
+    ctrlc::set_handler(move || {
+        cleanup();
         process::exit(0);
     }).expect("Error setting Ctrl-C handler");
 
-    // Safeguard which clears the screen if no interaction occurs in two minutes
+    // Safeguard which terminates program execution if no interaction occurs in two minutes
     let timer = thread::spawn(|| {
         thread::sleep(Duration::from_secs(SAFEGUARD_TIMEOUT));
     });
@@ -162,12 +170,10 @@ pub fn cleanup_on_enter_or_timeout<F>(f: F)
     });
 
     // Wait for user interaction or a safeguard activation
-    loop {
+    loop { // FIXME: this way of waiting consumes 100% of CPU time, use channels instead
         if prompt.is_finished() || timer.is_finished() {
             f();
-            // Clear last lines (with password/aliases) before exiting
-            let term = Term::stdout();
-            term.clear_last_lines(2).unwrap();
+            cleanup();
             return;
         }
     }

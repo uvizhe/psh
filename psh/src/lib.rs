@@ -137,8 +137,7 @@ impl Psh {
     }
 
     // XXX: If you make a custom return value, you can use zeroize trait to clean it automatically
-    pub fn construct_password(&mut self, alias: &str, secret: &str, charset: Option<CharSet>) -> String {
-        let charset = charset.unwrap_or(CharSet::Standard);
+    pub fn construct_password(&mut self, alias: &str, secret: &str, charset: CharSet) -> String {
         let alias_data =
             if self.alias_is_known(alias) {
                 let encrypted_alias = self.known_aliases.get(alias).unwrap();

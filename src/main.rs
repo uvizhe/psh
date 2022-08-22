@@ -12,52 +12,49 @@ fn main() {
     let cli = Cli::parse();
     let term = Term::stdout();
 
-    let master_password = get_or_set_master_password();
+    let master_password = prompt_master_password();
 
     let mut psh = match Psh::new(&master_password) {
         Ok(psh) => psh,
         Err(error) => {
-            term.write_line(&error.to_string())
-                .expect("Unable to write to terminal");
+            term.write_line(&error.to_string()).unwrap();
             return;
         }
     };
 
     if cli.list {
         print_aliases(&psh);
-        cleanup_on_enter_or_timeout(|| {});
+        before_cleanup_on_enter_or_timeout(|| {});
     } else {
         let alias =
             if let Some(cli_alias) = cli.alias {
                 cli_alias
             } else {
-                get_alias()
+                prompt_alias()
             };
 
         let charset =
             if psh.alias_is_known(&alias) {
                 psh.get_charset(&alias).unwrap()
             } else {
-                get_charset()
+                prompt_charset()
             };
 
-        let secret = get_secret();
+        let secret = prompt_secret();
 
-        let password = psh.construct_password(&alias, &secret, Some(charset));
+        let password = psh.construct_password(&alias, &secret, charset);
 
-        // Print password to STDOUT
         let mut output_password = password.clone();
         if cli.paranoid {
             output_password.replace_range(3..13, "**********");
         }
-
         term.write_line(&output_password).unwrap();
 
         if !psh.alias_is_known(&alias) {
             psh.write_alias_data_to_db().unwrap();
         }
 
-        cleanup_on_enter_or_timeout(|| {
+        before_cleanup_on_enter_or_timeout(|| {
             if cli.clipboard {
                 // TODO: use `x11-clipboard` instead of `clipboard`?
                 let mut clipboard: ClipboardContext = ClipboardProvider::new()
