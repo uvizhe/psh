@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use argon2::{
     password_hash::{Output, PasswordHasher, SaltString},
     Algorithm, Argon2, ParamsBuilder, Version
@@ -34,11 +34,10 @@ pub fn db_file() -> PathBuf {
 
 fn get_db() -> Result<PickleDb> {
     let db: PickleDb;
-
     let db_file = db_file();
     if db_file.exists() {
         db = PickleDb::load_json(&db_file, PickleDbDumpPolicy::AutoDump)
-            .context(format!("Failed to open `{:?}`", db_file))?;
+            .map_err(|err| PshError::DbOpenError(db_file, err))?;
     } else {
         db = PickleDb::new_json(&db_file, PickleDbDumpPolicy::AutoDump);
     }
@@ -51,13 +50,18 @@ fn hash_master_password(master_password: &str) -> Result<String> {
         bail!(PshError::MasterPasswordTooShort);
     }
     let mut argon2_params = ParamsBuilder::new();
-    argon2_params.m_cost(MASTER_PASSWORD_MEM_COST).unwrap()
-        .t_cost(MASTER_PASSWORD_TIME_COST).unwrap();
-    let argon2_params = argon2_params.params().unwrap();
-    let salt = SaltString::b64_encode(&master_password.as_ref()).unwrap();
+    argon2_params.m_cost(MASTER_PASSWORD_MEM_COST)
+        .expect("Error setting Argon2 memory cost");
+    argon2_params.t_cost(MASTER_PASSWORD_TIME_COST)
+        .expect("Error setting Argon2 time cost");
+    let argon2_params = argon2_params.params()
+        .expect("Error getting Argon2 params");
+    let salt = SaltString::b64_encode(&master_password.as_ref())
+        .expect("Error making a salt for master password");
     let argon2 = Argon2::new(Algorithm::default(), Version::default(), argon2_params);
     let hash = argon2.hash_password(&[], &salt)
-        .expect("Argon2 is unable to produce hash for the master password");
+        .expect("Error hashing master password");
+
     Ok(hash.hash.unwrap().to_string())
 }
 
@@ -67,14 +71,13 @@ fn get_aliases(db: &PickleDb, hashed_mp: &str) -> Result<HashMap<String, Output>
     if let Some(nonce) = enc_aliases.iter().position(|x| x == "nonce") {
         enc_aliases.remove(nonce);
     }
-    for enc_alias in enc_aliases.iter() {
-        let enc_alias = match Output::b64_decode(enc_alias) {
-            Ok(decoded) => decoded,
-            Err(error) => bail!("Unable to decode alias as base64: {:?}", error),
-        };
+    for enc_alias in enc_aliases.into_iter() {
+        let enc_alias = Output::b64_decode(&enc_alias)
+            .map_err(|err| PshError::DbAliasDecodeError(enc_alias, err))?;
         let alias = AliasData::decrypt_alias(enc_alias, hashed_mp)?;
         aliases.insert(alias, enc_alias);
     }
+
     Ok(aliases)
 }
 
@@ -82,7 +85,7 @@ pub struct Psh {
     db: PickleDb,
     master_password: String,
     known_aliases: HashMap<String, Output>,
-    alias_data: OnceCell<AliasData>,
+    alias_data: Option<AliasData>,
 }
 
 impl Psh {
@@ -95,7 +98,7 @@ impl Psh {
             db: db,
             master_password: hashed_mp,
             known_aliases: aliases,
-            alias_data: OnceCell::new(),
+            alias_data: None,
         };
 
         Ok(psh)
@@ -109,17 +112,22 @@ impl Psh {
         self.known_aliases.contains_key(alias)
     }
 
-    pub fn get_charset(&self, alias: &str) -> Option<CharSet> {
+    /// # Panics
+    /// Panics if `alias` is not present in DB.
+    pub fn get_charset(&self, alias: &str) -> CharSet {
         if let Some(db_key) = self.known_aliases.get(alias) {
             self.db.get(&db_key.to_string())
+                .expect("Error getting alias from DB")
         } else {
-            None
+            panic!("Unknown alias");
         }
     }
 
     pub fn write_alias_data_to_db(&mut self) -> Result<()> {
-        if let Some(alias_data) = self.alias_data.get() {
-            let key = alias_data.encrypted_alias().unwrap().to_string();
+        if let Some(alias_data) = &self.alias_data {
+            let key = alias_data.encrypted_alias()
+                .expect("Alias was not encrypted")
+                .to_string();
             self.db.set(&key, &alias_data.charset())?;
             self.db.set("nonce", &alias_data.nonce())?;
         } else {
@@ -128,16 +136,17 @@ impl Psh {
         Ok(())
     }
 
-    fn get_new_nonce(&self) -> u32 {
-        if let Some(nonce) = self.db.get::<u32>("nonce") {
-            nonce + 1
-        } else {
-            0
-        }
-    }
-
-    // XXX: If you make a custom return value, you can use zeroize trait to clean it automatically
+    /// # Panics
+    /// Panics if `alias` is an empty string.
+    /// Panics if `secret` is an empty string.
     pub fn construct_password(&mut self, alias: &str, secret: &str, charset: CharSet) -> String {
+        if alias.is_empty() {
+            panic!("Alias should not be empty");
+        }
+        if secret.is_empty() {
+            panic!("Secret should not be empty");
+        }
+
         let alias_data =
             if self.alias_is_known(alias) {
                 let encrypted_alias = self.known_aliases.get(alias).unwrap();
@@ -148,25 +157,39 @@ impl Psh {
                 alias_data.encrypt_alias(&self.master_password);
                 alias_data
             };
-        self.alias_data.set(alias_data).unwrap();
+        self.alias_data = Some(alias_data);
+
         let collected_bytes = self.collect_bytes(secret);
         // Pick password bytes to satisfy charset
         let password_slice = self.pick_suitable_slice(collected_bytes);
 
-        String::from_utf8(password_slice).unwrap()
+        String::from_utf8(password_slice)
+            .expect("Error producing password string from collected bytes")
     }
 
-    // Generates COLLECTED_BYTES_LEN bytes using argon2 hashing algorithm with alias and secret as inputs.
-    // Alias is used for salt and is hased beforehand with SHA256 to satisfy salt minimum length.
+    fn get_new_nonce(&self) -> u32 {
+        if let Some(nonce) = self.db.get::<u32>("nonce") {
+            nonce + 1
+        } else {
+            0
+        }
+    }
+
+    // Generates COLLECTED_BYTES_LEN bytes using argon2 hashing algorithm with hashed_mp + alias and secret as inputs.
     fn collect_bytes(&self, secret: &str) -> Vec<u8> {
-        let alias_data = self.alias_data.get().unwrap();
+        let alias_data = self.alias_data.as_ref()
+            .expect("`alias_data` was not initialized");
         let mut argon2_params = ParamsBuilder::new();
-        argon2_params.output_len(COLLECTED_BYTES_LEN).unwrap();
-        let argon2_params = argon2_params.params().unwrap();
+        argon2_params.output_len(COLLECTED_BYTES_LEN)
+            .expect("Error setting Argon2 output length");
+        let argon2_params = argon2_params.params()
+            .expect("Error getting Argon2 params");
         let argon2 = Argon2::new(Algorithm::default(), Version::default(), argon2_params);
-        let salt = Sha256::digest(alias_data.alias()); // Make salt satisfy length criterium
-        let salt = SaltString::b64_encode(&salt).unwrap();
-        let hash = argon2.hash_password(secret.as_ref(), &salt).unwrap();
+        let salt = self.master_password.clone() + alias_data.alias();
+        let salt = SaltString::b64_encode(salt.as_bytes())
+            .expect("Error making a salt for password");
+        let hash = argon2.hash_password(secret.as_ref(), &salt)
+            .expect("Error hashing master password");
         let hash = hash.hash.unwrap();
 
         let mut collected_bytes = Vec::new();
@@ -184,7 +207,6 @@ impl Psh {
                 }
             }
         }
-        assert!(collected_bytes.is_ascii());
 
         collected_bytes
     }
@@ -192,7 +214,8 @@ impl Psh {
     // Checks Standard and Reduced set for inclusion of punctuation and numeric characters respectively.
     // If the first chunk of `collected_bytes` does not meet the criterium tries to use next and so on.
     fn pick_suitable_slice(&self, collected_bytes: Vec<u8>) -> Vec<u8> {
-        let alias_data = self.alias_data.get().unwrap();
+        let alias_data = self.alias_data.as_ref()
+            .expect("`alias_data` was not initialized");
         let mut password_slice: Vec<u8> = vec![];
         let slices = collected_bytes.chunks_exact(PASSWORD_LEN);
         for slice in slices {
@@ -220,7 +243,6 @@ impl Psh {
             let last_chunk_pos = collected_bytes.len() - PASSWORD_LEN;
             password_slice = collected_bytes[last_chunk_pos..].to_vec();
         }
-        assert!(password_slice.len() == PASSWORD_LEN);
 
         password_slice
     }
@@ -277,7 +299,6 @@ impl AliasData {
     }
 
     fn pad_to_30_bytes(string: &str) -> [u8; 30] {
-        assert!(string.len() <= 30);
         let mut padded: [u8; 30] = [0; 30];
         let mut bytes = string.as_bytes().to_vec();
         bytes.reverse();
@@ -313,10 +334,9 @@ impl AliasData {
         match dec_result {
             Ok(dec) => {
                 let alias_bytes: Vec<u8> = dec.iter().filter(|x| **x != 0).map(|&x| x).collect();
-                assert!(alias_bytes.is_ascii());
                 Ok(String::from_utf8(alias_bytes)?)
             }
-            Err(_) => bail!(PshError::WrongMasterPassword),
+            Err(_) => bail!(PshError::MasterPasswordWrong),
         }
     }
 }
@@ -329,8 +349,15 @@ pub enum CharSet {
 
 #[derive(Error, Debug)]
 pub enum PshError {
+    #[error("Failed to open {0}: {1}")]
+    DbOpenError(PathBuf, pickledb::error::Error),
+
+    #[error("Unable to decode alias {0} as Base64: {1}")]
+    DbAliasDecodeError(String, argon2::password_hash::Error),
+
     #[error("Master password is too short (less than {} chars)", MASTER_PASSWORD_MIN_LEN)]
     MasterPasswordTooShort,
+
     #[error("Wrong master password")]
-    WrongMasterPassword,
+    MasterPasswordWrong,
 }

@@ -11,8 +11,6 @@ use psh::{Psh, CharSet, db_file, MASTER_PASSWORD_MIN_LEN};
 
 const SAFEGUARD_TIMEOUT: u64 = 120;
 
-// TODO: Use `zeroize` to wipe password from memory.
-
 #[derive(Parser)]
 #[clap(version)]
 #[clap(global_setting(AppSettings::DeriveDisplayOrder))]

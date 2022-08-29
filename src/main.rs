@@ -35,7 +35,7 @@ fn main() {
 
         let charset =
             if psh.alias_is_known(&alias) {
-                psh.get_charset(&alias).unwrap()
+                psh.get_charset(&alias)
             } else {
                 prompt_charset()
             };
