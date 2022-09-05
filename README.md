@@ -8,6 +8,8 @@ Another approach is a deterministic password generation like [pwcalc](https://gi
 
 *Psh* combines both approaches and generates deterministic passwords (which eliminates the necessity to synchronize password database), using three inputs: master password, alias and a secret word. Use of master password removes the requirement for a secret word to be strong, so user can choose easily memorable alias and secret word without compromising a security. *Psh* uses Argon2 algorithm to generate passwords, which makes it harder to guess passwords even if a part of input values is known. Aliases, that was previously used (along with selected character set for password generation) are stored in a simple DB file, so user don't need to select character set each time a password is being generated, and they are encrypted.
 
+![](/psh.gif "")
+
 ## Principle scheme
 
 ![](/psh.png "")
