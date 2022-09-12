@@ -14,6 +14,10 @@ Another approach is a deterministic password generation like [pwcalc](https://gi
 
 ![](/psh.png "")
 
+### Design rationale behind hashing master password separately
+
+Is to make attacks on *Psh* database harder: guessing a master password requires not only AES-CBC decryption work but also spending resources to hash candidate MP beforehand.
+
 ## TODO
 
 * Use `zeroize` and/or `secrecy` crates
