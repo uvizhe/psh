@@ -51,7 +51,7 @@ fn main() {
         term.write_line(&output_password).unwrap();
 
         if !psh.alias_is_known(&alias) {
-            psh.write_alias_data_to_db().unwrap();
+            psh.write_new_alias_to_db().unwrap();
         }
 
         before_cleanup_on_enter_or_timeout(|| {
