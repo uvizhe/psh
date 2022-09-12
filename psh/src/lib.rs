@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::io::Write;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
@@ -9,8 +10,6 @@ use argon2::{
     Algorithm, Argon2, ParamsBuilder, Version
 };
 use once_cell::unsync::OnceCell;
-use pickledb::{PickleDb, PickleDbDumpPolicy};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -30,19 +29,6 @@ pub fn db_file() -> PathBuf {
     db_file.push(DB_FILE);
 
     db_file
-}
-
-fn get_db() -> Result<PickleDb> {
-    let db: PickleDb;
-    let db_file = db_file();
-    if db_file.exists() {
-        db = PickleDb::load_json(&db_file, PickleDbDumpPolicy::AutoDump)
-            .map_err(|err| PshError::DbOpenError(db_file, err))?;
-    } else {
-        db = PickleDb::new_json(&db_file, PickleDbDumpPolicy::AutoDump);
-    }
-
-    Ok(db)
 }
 
 fn hash_master_password(master_password: &str) -> Result<String> {
@@ -65,40 +51,47 @@ fn hash_master_password(master_password: &str) -> Result<String> {
     Ok(hash.hash.unwrap().to_string())
 }
 
-fn get_aliases(db: &PickleDb, hashed_mp: &str) -> Result<HashMap<String, AliasData>> {
-    let mut aliases = HashMap::new();
-    let enc_aliases = db.get_all();
-    for enc_alias in enc_aliases.into_iter() {
-        let enc_alias = Output::b64_decode(&enc_alias)
-            .map_err(|err| PshError::DbAliasDecodeError(enc_alias, err))?;
-        let alias_data = AliasData::new_known(enc_alias, hashed_mp)?;
-        aliases.insert(alias_data.alias().to_string(), alias_data);
-    }
-
-    Ok(aliases)
-}
-
 pub struct Psh {
-    db: PickleDb,
     master_password: String,
     known_aliases: HashMap<String, AliasData>,
+    last_nonce: u32,
     new_alias: Option<AliasData>,
 }
 
 impl Psh {
     pub fn new(master_password: &str) -> Result<Self> {
         let hashed_mp = hash_master_password(master_password)?;
-        let db = get_db()?;
-        let aliases = get_aliases(&db, &hashed_mp)?;
 
-        let psh = Self {
-            db: db,
+        let mut psh = Self {
             master_password: hashed_mp,
-            known_aliases: aliases,
+            known_aliases: HashMap::new(),
+            last_nonce: u32::MAX,
             new_alias: None,
         };
 
+        psh.get_aliases()?;
+
         Ok(psh)
+    }
+
+    fn get_aliases(&mut self) -> Result<()> {
+        let db_file = db_file();
+        if db_file.exists() {
+            let db = File::open(db_file)?;
+            let reader = BufReader::new(db);
+            for line in reader.lines() {
+                let enc_alias = line?;
+                let enc_alias = Output::b64_decode(&enc_alias)
+                    .map_err(|err| PshError::DbAliasDecodeError(enc_alias, err))?;
+                let alias_data = AliasData::new_known(enc_alias, &self.master_password)?;
+
+                self.last_nonce = alias_data.nonce();
+
+                self.known_aliases.insert(alias_data.alias().to_string(), alias_data);
+            }
+        }
+
+        Ok(())
     }
 
     pub fn aliases(&self) -> Vec<&String> {
@@ -121,10 +114,13 @@ impl Psh {
 
     pub fn write_new_alias_to_db(&mut self) -> Result<()> {
         if let Some(alias_data) = &self.new_alias {
-            let key = alias_data.encrypted_alias()
+            let mut key = alias_data.encrypted_alias()
                 .expect("Alias was not encrypted")
                 .to_string();
-            self.db.set(&key, &0)?;
+            key.push('\n');
+
+            let mut db = File::options().create(true).append(true).open(db_file())?;
+            db.write_all(&key.as_bytes())?;
         } else {
             bail!("Cannot write uninitialized alias data to DB");
         }
@@ -158,8 +154,7 @@ impl Psh {
     }
 
     fn get_new_nonce(&self) -> u32 {
-        // TODO: Return nonce of last alias + 1
-        self.db.total_keys() as u32
+        self.last_nonce.wrapping_add(1)
     }
 
     // Generates COLLECTED_BYTES_LEN bytes using argon2 hashing algorithm with hashed_mp + alias and secret as inputs.
@@ -271,6 +266,10 @@ impl AliasData {
         self.encrypted_alias.get()
     }
 
+    pub fn nonce(&self) -> u32 {
+        self.nonce
+    }
+
     pub fn charset(&self) -> CharSet {
         self.charset
     }
@@ -343,7 +342,7 @@ impl AliasData {
     }
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug)]
 pub enum CharSet {
     Standard,
     Reduced,
@@ -351,9 +350,6 @@ pub enum CharSet {
 
 #[derive(Error, Debug)]
 pub enum PshError {
-    #[error("Failed to open {0}: {1}")]
-    DbOpenError(PathBuf, pickledb::error::Error),
-
     #[error("Unable to decode alias {0} as Base64: {1}")]
     DbAliasDecodeError(String, argon2::password_hash::Error),
 
