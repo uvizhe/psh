@@ -6,7 +6,9 @@ use clipboard::{ClipboardProvider, ClipboardContext};
 use console::Term;
 
 use psh::Psh;
-use psh_cli::*;
+use crate::cli::*;
+
+mod cli;
 
 fn main() {
     let cli = Cli::parse();
