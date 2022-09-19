@@ -40,9 +40,21 @@ fn main() {
                 prompt_charset()
             };
 
-        let secret = prompt_secret();
+        let use_secret =
+            if psh.alias_is_known(&alias) {
+                psh.alias_uses_secret(&alias)
+            } else {
+                prompt_secret_use()
+            };
 
-        let password = psh.construct_password(&alias, &secret, charset);
+        let secret =
+            if use_secret {
+                Some(prompt_secret())
+            } else {
+                None
+            };
+
+        let password = psh.construct_password(&alias, secret, charset);
 
         let mut output_password = password.clone();
         if cli.paranoid {

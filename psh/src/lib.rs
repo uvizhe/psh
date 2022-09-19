@@ -65,7 +65,7 @@ impl Psh {
         let mut psh = Self {
             master_password: hashed_mp,
             known_aliases: HashMap::new(),
-            last_nonce: u32::MAX,
+            last_nonce: u32::MAX >> 2, // max nonce is 2^30 - 1
             new_alias: None,
         };
 
@@ -104,6 +104,16 @@ impl Psh {
 
     /// # Panics
     /// Panics if `alias` is not present in DB.
+    pub fn alias_uses_secret(&self, alias: &str) -> bool {
+        if let Some(alias_data) = self.known_aliases.get(alias) {
+            alias_data.use_secret()
+        } else {
+            panic!("Unknown alias");
+        }
+    }
+
+    /// # Panics
+    /// Panics if `alias` is not present in DB.
     pub fn get_charset(&self, alias: &str) -> CharSet {
         if let Some(alias_data) = self.known_aliases.get(alias) {
             alias_data.charset()
@@ -129,23 +139,34 @@ impl Psh {
 
     /// # Panics
     /// Panics if `alias` is an empty string.
-    /// Panics if `secret` is an empty string.
-    pub fn construct_password(&mut self, alias: &str, secret: &str, charset: CharSet) -> String {
+    /// Panics if `alias` expects `secret` but None or empty string is given.
+    pub fn construct_password(
+        &mut self,
+        alias: &str,
+        secret: Option<String>, // move `secret` so client code doesn't have to mess with zeroizing memory
+        charset: CharSet,
+    ) -> String {
         if alias.is_empty() {
-            panic!("Alias should not be empty");
-        }
-        if secret.is_empty() {
-            panic!("Secret should not be empty");
+            panic!("Alias cannot be empty");
         }
 
-        if !self.alias_is_known(alias) {
+        let use_secret: bool;
+        if self.alias_is_known(alias) {
+            let alias_data = self.known_aliases.get(alias).unwrap();
+            use_secret = alias_data.use_secret();
+        } else {
             let nonce = self.get_new_nonce();
-            let mut alias_data = AliasData::new(alias, nonce, charset);
+            use_secret = secret.is_some();
+            let mut alias_data = AliasData::new(alias, nonce, use_secret, charset);
             alias_data.encrypt_alias(&self.master_password);
             self.new_alias = Some(alias_data);
         }
+        if use_secret && (secret.is_none() || secret.as_ref().unwrap().is_empty()) {
+            panic!("Secret must not be empty for this alias");
+        }
 
-        let collected_bytes = self.collect_bytes(alias, secret, charset);
+        let secret = secret.unwrap_or("".to_string());
+        let collected_bytes = self.collect_bytes(alias, &secret, charset);
         // Pick password bytes to satisfy charset
         let password_slice = Self::pick_suitable_slice(charset, collected_bytes);
 
@@ -154,7 +175,13 @@ impl Psh {
     }
 
     fn get_new_nonce(&self) -> u32 {
-        self.last_nonce.wrapping_add(1)
+        if self.last_nonce > u32::MAX >> 2 {
+            panic!("Nonce must not be higher than u32::MAX >> 2, check your code");
+        } else if self.last_nonce == u32::MAX >> 2 {
+            0
+        } else {
+            self.last_nonce + 1
+        }
     }
 
     // Generates COLLECTED_BYTES_LEN bytes using argon2 hashing algorithm with hashed_mp + alias and secret as inputs.
@@ -231,21 +258,24 @@ struct AliasData {
     alias: String,
     encrypted_alias: OnceCell<Output>,
     nonce: u32,
+    use_secret: bool,
     charset: CharSet,
 }
 
 impl AliasData {
-    pub fn new(alias: &str, nonce: u32, charset: CharSet) -> Self {
+    pub fn new(alias: &str, nonce: u32, use_secret: bool, charset: CharSet) -> Self {
         Self {
             alias: alias.to_string(),
             encrypted_alias: OnceCell::new(),
             nonce,
+            use_secret,
             charset,
         }
     }
 
     pub fn new_known(encrypted_alias: Output, password: &str) -> Result<Self> {
         let nonce = Self::extract_nonce(encrypted_alias);
+        let use_secret = !Self::extract_secret_flag(encrypted_alias);
         let charset = Self::extract_charset(encrypted_alias);
 
         let alias = Self::decrypt_alias(encrypted_alias, password)?;
@@ -254,6 +284,7 @@ impl AliasData {
             alias,
             encrypted_alias: OnceCell::with_value(encrypted_alias),
             nonce,
+            use_secret,
             charset,
         })
     }
@@ -270,32 +301,46 @@ impl AliasData {
         self.nonce
     }
 
+    pub fn use_secret(&self) -> bool {
+        self.use_secret
+    }
+
     pub fn charset(&self) -> CharSet {
         self.charset
     }
 
-    fn encode_nonce(&self) -> [u8; 4] {
-        self.nonce.to_le_bytes()
-    }
-
-    fn encode_charset(&self) -> &[u8] {
-        match self.charset {
-            CharSet::Standard => &[0],
-            CharSet::Reduced => &[1],
+    fn encode_nonce_and_flags(&self) -> Vec<u8> {
+        let mut nonce_and_flags = self.nonce;
+        nonce_and_flags <<= 2;
+        // Lower security choices set flags to 1, defaults (0) are the most secure
+        if !self.use_secret {
+            nonce_and_flags |= 1;
         }
+        if self.charset == CharSet::Reduced {
+            nonce_and_flags |= 1 << 1;
+        }
+        nonce_and_flags.to_le_bytes().to_vec()
     }
 
     fn extract_nonce(encrypted_alias: Output) -> u32 {
         let nonce: [u8; 4] = encrypted_alias.as_bytes()[0..4].try_into().unwrap();
-        u32::from_le_bytes(nonce)
+        let nonce = u32::from_le_bytes(nonce);
+        nonce >> 2
+    }
+
+    fn extract_secret_flag(encrypted_alias: Output) -> bool {
+        let bit_flags: u8 = encrypted_alias.as_bytes()[0].try_into().unwrap();
+        match bit_flags & 1 {
+            0 => false, // zero bit isn't set => use secret
+            _ => true,  // zero bit is set => do not use secret
+        }
     }
 
     fn extract_charset(encrypted_alias: Output) -> CharSet {
-        let charset: u8 = encrypted_alias.as_bytes()[4].try_into().unwrap();
-        match charset {
-            0 => CharSet::Standard,
-            1 => CharSet::Reduced,
-            _ => unreachable!("Unknown CharSet encoded")
+        let bit_flags: u8 = encrypted_alias.as_bytes()[0].try_into().unwrap();
+        match bit_flags & (1 << 1) {
+            0 => CharSet::Standard, // 1st bit isn't set => Standard
+            _ => CharSet::Reduced,  // 1st bit is set => Reduced
         }
     }
 
@@ -318,7 +363,7 @@ impl AliasData {
         let enc = Aes128CbcEnc::new(key.into(), iv.into())
             .encrypt_padded_b2b_mut::<Pkcs7>(&padded_alias, &mut buf)
             .unwrap();
-        let enc = &[self.encode_nonce().as_slice(), self.encode_charset(), enc].concat();
+        let enc = &[&self.encode_nonce_and_flags(), enc].concat();
         let enc = Output::new(enc).unwrap();
         self.encrypted_alias.set(enc).unwrap();
     }
@@ -331,7 +376,7 @@ impl AliasData {
         let (key, iv) = salt.split_at(16);
         let mut buf = [0u8; 32];
         let dec_result = Aes128CbcDec::new(key.into(), iv.into())
-            .decrypt_padded_b2b_mut::<Pkcs7>(&encrypted_alias.as_bytes()[5..], &mut buf);
+            .decrypt_padded_b2b_mut::<Pkcs7>(&encrypted_alias.as_bytes()[4..], &mut buf);
         match dec_result {
             Ok(dec) => {
                 let alias_bytes: Vec<u8> = dec.iter().filter(|x| **x != 0).map(|&x| x).collect();
@@ -342,7 +387,7 @@ impl AliasData {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum CharSet {
     Standard,
     Reduced,

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use clap::{AppSettings, ArgGroup, Parser};
 use console::Term;
-use dialoguer::{Input, Select, Password, theme::Theme};
+use dialoguer::{Confirm, Input, Select, Password, theme::Theme};
 
 use psh::{Psh, CharSet, db_file, MASTER_PASSWORD_MIN_LEN};
 
@@ -122,6 +122,14 @@ NOTE: Standard character set consists of all printable ASCII characters while Re
     charset = sets[choice];
 
     charset
+}
+
+pub fn prompt_secret_use() -> bool {
+    Confirm::new()
+        .with_prompt("Do you want to use a secret word for this alias for even higher level of Security?")
+        .default(true)
+        .interact()
+        .unwrap()
 }
 
 pub fn prompt_secret() -> String {
