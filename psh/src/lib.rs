@@ -3,16 +3,21 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
-use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{
+    block_padding::Pkcs7,
+    BlockDecryptMut, BlockEncryptMut, KeyIvInit,
+};
 use anyhow::{bail, Result};
 use argon2::{
-    password_hash::{Output, PasswordHasher, SaltString},
-    Algorithm, Argon2, ParamsBuilder, Version
+    password_hash::{PasswordHasher, SaltString},
+    Algorithm, Argon2, ParamsBuilder, Version,
 };
+use base64ct::{Base64, Encoding};
 use once_cell::unsync::OnceCell;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+pub const ALIAS_MAX_LEN: usize = 79;
 pub const MASTER_PASSWORD_MIN_LEN: usize = 8;
 const DB_FILE: &str = ".psh.db";
 const PASSWORD_LEN: usize = 16;
@@ -42,7 +47,9 @@ fn hash_master_password(master_password: &str) -> Result<String> {
         .expect("Error setting Argon2 time cost");
     let argon2_params = argon2_params.params()
         .expect("Error getting Argon2 params");
-    let salt = SaltString::b64_encode(&master_password.as_ref())
+
+    let salt = Sha256::digest(master_password);
+    let salt = SaltString::b64_encode(&salt)
         .expect("Error making a salt for master password");
     let argon2 = Argon2::new(Algorithm::default(), Version::default(), argon2_params);
     let hash = argon2.hash_password(&[], &salt)
@@ -81,8 +88,6 @@ impl Psh {
             let reader = BufReader::new(db);
             for line in reader.lines() {
                 let enc_alias = line?;
-                let enc_alias = Output::b64_decode(&enc_alias)
-                    .map_err(|err| PshError::DbAliasDecodeError(enc_alias, err))?;
                 let alias_data = AliasData::new_known(enc_alias, &self.master_password)?;
 
                 self.last_nonce = alias_data.nonce();
@@ -139,6 +144,7 @@ impl Psh {
 
     /// # Panics
     /// Panics if `alias` is an empty string.
+    /// Panics if `alias` is longer than ALIAS_MAX_LEN.
     /// Panics if `alias` expects `secret` but None or empty string is given.
     pub fn construct_password(
         &mut self,
@@ -149,6 +155,9 @@ impl Psh {
         if alias.is_empty() {
             panic!("Alias cannot be empty");
         }
+        if alias.len() > ALIAS_MAX_LEN {
+            panic!("Alias is too long (more than {} bytes)", ALIAS_MAX_LEN);
+        }
 
         let use_secret: bool;
         if self.alias_is_known(alias) {
@@ -158,7 +167,7 @@ impl Psh {
             let nonce = self.get_new_nonce();
             use_secret = secret.is_some();
             let mut alias_data = AliasData::new(alias, nonce, use_secret, charset);
-            alias_data.encrypt_alias(&self.master_password);
+            alias_data.encrypt_alias(&self.master_password); // FIXME: this can be done upon creation of alias_data
             self.new_alias = Some(alias_data);
         }
         if use_secret && (secret.is_none() || secret.as_ref().unwrap().is_empty()) {
@@ -192,8 +201,8 @@ impl Psh {
         let argon2_params = argon2_params.params()
             .expect("Error getting Argon2 params");
         let argon2 = Argon2::new(Algorithm::default(), Version::default(), argon2_params);
-        let salt = self.master_password.clone() + alias;
-        let salt = SaltString::b64_encode(salt.as_bytes())
+        let salt = Sha256::digest(self.master_password.clone() + alias);
+        let salt = SaltString::b64_encode(&salt)
             .expect("Error making a salt for password");
         let hash = argon2.hash_password(secret.as_ref(), &salt)
             .expect("Error hashing master password");
@@ -256,7 +265,7 @@ impl Psh {
 #[derive(Debug)]
 struct AliasData {
     alias: String,
-    encrypted_alias: OnceCell<Output>,
+    encrypted_alias: OnceCell<String>,
     nonce: u32,
     use_secret: bool,
     charset: CharSet,
@@ -273,27 +282,15 @@ impl AliasData {
         }
     }
 
-    pub fn new_known(encrypted_alias: Output, password: &str) -> Result<Self> {
-        let nonce = Self::extract_nonce(encrypted_alias);
-        let use_secret = !Self::extract_secret_flag(encrypted_alias);
-        let charset = Self::extract_charset(encrypted_alias);
-
-        let alias = Self::decrypt_alias(encrypted_alias, password)?;
-
-        Ok(Self {
-            alias,
-            encrypted_alias: OnceCell::with_value(encrypted_alias),
-            nonce,
-            use_secret,
-            charset,
-        })
+    pub fn new_known(encrypted_alias: String, password: &str) -> Result<Self> {
+        Self::decrypt_alias(encrypted_alias, password)
     }
 
     pub fn alias(&self) -> &str {
         &self.alias
     }
 
-    pub fn encrypted_alias(&self) -> Option<&Output> {
+    pub fn encrypted_alias(&self) -> Option<&String> {
         self.encrypted_alias.get()
     }
 
@@ -309,6 +306,14 @@ impl AliasData {
         self.charset
     }
 
+    // XXX: Is it safe to pad with predictable data?
+    fn padded_alias(&self) -> [u8; ALIAS_MAX_LEN] {
+        let alias_len = self.alias.len();
+        let mut padded = [0u8; ALIAS_MAX_LEN];
+        padded[..alias_len].copy_from_slice(self.alias.as_bytes());
+        padded
+    }
+
     fn encode_nonce_and_flags(&self) -> Vec<u8> {
         let mut nonce_and_flags = self.nonce;
         nonce_and_flags <<= 2;
@@ -322,65 +327,77 @@ impl AliasData {
         nonce_and_flags.to_le_bytes().to_vec()
     }
 
-    fn extract_nonce(encrypted_alias: Output) -> u32 {
-        let nonce: [u8; 4] = encrypted_alias.as_bytes()[0..4].try_into().unwrap();
+    fn extract_nonce(encrypted_alias: &[u8]) -> u32 {
+        let nonce: [u8; 4] = encrypted_alias[0..4].try_into().unwrap();
         let nonce = u32::from_le_bytes(nonce);
         nonce >> 2
     }
 
-    fn extract_secret_flag(encrypted_alias: Output) -> bool {
-        let bit_flags: u8 = encrypted_alias.as_bytes()[0].try_into().unwrap();
+    fn extract_secret_flag(encrypted_alias: &[u8]) -> bool {
+        let bit_flags: u8 = encrypted_alias[0].try_into().unwrap();
         match bit_flags & 1 {
             0 => false, // zero bit isn't set => use secret
             _ => true,  // zero bit is set => do not use secret
         }
     }
 
-    fn extract_charset(encrypted_alias: Output) -> CharSet {
-        let bit_flags: u8 = encrypted_alias.as_bytes()[0].try_into().unwrap();
+    fn extract_charset(encrypted_alias: &[u8]) -> CharSet {
+        let bit_flags: u8 = encrypted_alias[0].try_into().unwrap();
         match bit_flags & (1 << 1) {
             0 => CharSet::Standard, // 1st bit isn't set => Standard
             _ => CharSet::Reduced,  // 1st bit is set => Reduced
         }
     }
 
-    fn pad_to_30_bytes(string: &str) -> [u8; 30] {
-        let mut padded: [u8; 30] = [0; 30];
-        let mut bytes = string.as_bytes().to_vec();
-        bytes.reverse();
-        padded.as_mut_slice().write(&bytes).unwrap();
-        padded.reverse();
-        padded
-    }
-
     fn encrypt_alias(&mut self, password: &str) {
-        let padded_alias = Self::pad_to_30_bytes(&self.alias);
+        let alias = self.padded_alias();
+
         let salt = password.to_string() + &self.nonce.to_string();
         let salt = Sha256::digest(salt);
         // In AES128 key size and iv size are the same, 16 bytes, half of SHA256
         let (key, iv) = salt.split_at(16);
-        let mut buf = [0u8; 32];
+        let mut buf = [0u8; ALIAS_MAX_LEN * 2];
         let enc = Aes128CbcEnc::new(key.into(), iv.into())
-            .encrypt_padded_b2b_mut::<Pkcs7>(&padded_alias, &mut buf)
+            .encrypt_padded_b2b_mut::<Pkcs7>(&alias, &mut buf)
             .unwrap();
         let enc = &[&self.encode_nonce_and_flags(), enc].concat();
-        let enc = Output::new(enc).unwrap();
-        self.encrypted_alias.set(enc).unwrap();
+        buf = [0u8; ALIAS_MAX_LEN * 2];
+        let enc = Base64::encode(enc, &mut buf).unwrap();
+        self.encrypted_alias.set(enc.to_string()).unwrap();
     }
 
-    fn decrypt_alias(encrypted_alias: Output, password: &str) -> Result<String> {
-        let nonce = Self::extract_nonce(encrypted_alias);
+    fn decrypt_alias(encrypted_alias: String, password: &str) -> Result<Self> {
+        // Decode base64 alias data representation
+        let mut buf = [0u8; ALIAS_MAX_LEN * 2];
+        let enc_alias = Base64::decode(&encrypted_alias.as_bytes(), &mut buf)
+            .map_err(|err| PshError::DbAliasDecodeError(encrypted_alias.clone(), err))?;
+
+        let nonce = Self::extract_nonce(&enc_alias);
+        let use_secret = !Self::extract_secret_flag(&enc_alias);
+        let charset = Self::extract_charset(&enc_alias);
+
+        // Decrypt alias
         let salt = password.to_string() + &nonce.to_string();
         let salt = Sha256::digest(salt);
         // In AES128 key size and iv size are the same, 16 bytes, half of SHA256
         let (key, iv) = salt.split_at(16);
-        let mut buf = [0u8; 32];
+        let mut buf = [0u8; ALIAS_MAX_LEN * 2];
         let dec_result = Aes128CbcDec::new(key.into(), iv.into())
-            .decrypt_padded_b2b_mut::<Pkcs7>(&encrypted_alias.as_bytes()[4..], &mut buf);
+            .decrypt_padded_b2b_mut::<Pkcs7>(&enc_alias[4..], &mut buf);
         match dec_result {
             Ok(dec) => {
-                let alias_bytes: Vec<u8> = dec.iter().filter(|x| **x != 0).map(|&x| x).collect();
-                Ok(String::from_utf8(alias_bytes)?)
+                let alias_bytes: Vec<u8> = dec.iter()
+                    .filter(|x| **x != 0x0) // Unpad ZeroPadding
+                    .map(|&x| x)
+                    .collect();
+                let alias = String::from_utf8(alias_bytes)?;
+                Ok(Self {
+                    alias,
+                    encrypted_alias: OnceCell::with_value(encrypted_alias),
+                    nonce,
+                    use_secret,
+                    charset,
+                })
             }
             Err(_) => bail!(PshError::MasterPasswordWrong),
         }
@@ -396,9 +413,9 @@ pub enum CharSet {
 #[derive(Error, Debug)]
 pub enum PshError {
     #[error("Unable to decode alias {0} as Base64: {1}")]
-    DbAliasDecodeError(String, argon2::password_hash::Error),
+    DbAliasDecodeError(String, base64ct::Error),
 
-    #[error("Master password is too short (less than {} chars)", MASTER_PASSWORD_MIN_LEN)]
+    #[error("Master password is too short (less than {} chars)", MASTER_PASSWORD_MIN_LEN)] //FIXME: not chars but bytes actually
     MasterPasswordTooShort,
 
     #[error("Wrong master password")]

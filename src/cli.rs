@@ -7,7 +7,7 @@ use clap::{AppSettings, ArgGroup, Parser};
 use console::Term;
 use dialoguer::{Confirm, Input, Select, Password, theme::Theme};
 
-use psh::{Psh, CharSet, db_file, MASTER_PASSWORD_MIN_LEN};
+use psh::{Psh, CharSet, db_file, ALIAS_MAX_LEN, MASTER_PASSWORD_MIN_LEN};
 
 const SAFEGUARD_TIMEOUT: u64 = 120;
 
@@ -40,8 +40,11 @@ pub struct Cli {
 }
 
 fn trim_string(value: &str) -> Result<String, String> {
-    if value.trim().is_empty() {
+    let value = value.trim();
+    if value.is_empty() {
         Err("Empty string".to_string())
+    } else if value.len() > ALIAS_MAX_LEN {
+        Err(format!("Alias too long. Must be {} bytes at most", ALIAS_MAX_LEN))
     } else {
         Ok(value.to_string())
     }
@@ -92,8 +95,11 @@ pub fn prompt_alias() -> String {
     let alias = Input::with_theme(&theme)
         .with_prompt("Alias")
         .validate_with(|input: &String| {
-            if input.trim().is_empty() {
-                Err("Alias cannot be empty")
+            let input = input.trim();
+            if input.is_empty() {
+                Err("Alias cannot be empty".to_string())
+            } else if input.len() > ALIAS_MAX_LEN {
+                Err(format!("Alias too long. Must be {} bytes at most", ALIAS_MAX_LEN))
             } else {
                 Ok(())
             }
