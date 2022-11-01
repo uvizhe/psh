@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{File, Permissions};
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use aes::cipher::{
@@ -135,6 +136,8 @@ impl Psh {
             key.push('\n');
 
             let mut db = File::options().create(true).append(true).open(db_file())?;
+            let user_only_perms = Permissions::from_mode(0o600);
+            db.set_permissions(user_only_perms)?;
             db.write_all(&key.as_bytes())?;
         } else {
             bail!("Cannot write uninitialized alias data to DB");
