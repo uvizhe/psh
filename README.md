@@ -6,7 +6,7 @@ One approach is a ubiquitous password manager software like KeePass which has di
 
 Another approach is a deterministic password generation like [pwcalc](https://github.com/pmorjan/pwcalc-chrome) which, if not used with strong secret words, produces passwords that are easy to guess.
 
-*Psh* combines both approaches and generates deterministic passwords (which eliminates the necessity to synchronize password database), using three inputs: master password, alias and a secret word. Use of master password removes the requirement for a secret word to be strong, so user can choose easily memorable alias and secret word without compromising security. *Psh* uses Argon2 algorithm to generate passwords, which makes it harder to guess passwords even if part of input values is known. Aliases, that was previously used (along with selected character set for password generation) are stored in a simple DB file, so user don't need to select character set each time a password is being generated, and they are encrypted.
+*Psh* combines both approaches and generates deterministic passwords (which eliminates the necessity to synchronize password database), using three inputs: master password, alias and a secret word. Use of master password removes the requirement for a secret word to be strong (*Psh* even allows to not use it), so user can choose easily memorable alias and secret word without compromising security. *Psh* uses Argon2 algorithm to generate passwords, which makes it harder to guess passwords even if part of input values is known. Aliases, that was previously used (along with selected character set for password generation) are stored in a simple DB file, so user don't need to select character set each time a password is being generated, and they are encrypted.
 
 ![](/psh.gif "")
 
@@ -21,9 +21,8 @@ Is to make attacks on *Psh* database harder: guessing a master password requires
 ## TODO
 
 * Use `zeroize` and/or `secrecy` crates
-* Set appropriate (600) BD file permissions
 * Integrate with `keyutils`/`libsecret`
-* Build binary for Termux and make Android app
+* Build binary for Termux and Android app
 
 ## Other notes
 
