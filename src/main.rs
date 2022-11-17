@@ -27,6 +27,16 @@ fn main() {
     if cli.list {
         print_aliases(&psh);
         before_cleanup_on_enter_or_timeout(|| {});
+    } else if cli.remove {
+        let alias = cli.alias
+            .expect("Alias is not given");
+        match psh.remove_alias_from_db(&alias) {
+            Ok(()) => return, // FIXME: use different exit codes
+            Err(error) => {
+                term.write_line(&error.to_string()).unwrap();
+                return; // FIXME: use different exit codes
+            }
+        }
     } else {
         let alias =
             if let Some(cli_alias) = cli.alias {
@@ -65,7 +75,7 @@ fn main() {
         term.write_line(&output_password).unwrap();
 
         if !psh.alias_is_known(&alias) {
-            psh.write_new_alias_to_db().unwrap();
+            psh.append_alias_to_db().unwrap();
         }
 
         before_cleanup_on_enter_or_timeout(|| {

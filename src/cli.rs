@@ -30,6 +30,10 @@ pub struct Cli {
     #[clap(short, long)]
     pub list: bool,
 
+    /// Remove given alias from database
+    #[clap(long, requires = "alias")]
+    pub remove: bool,
+
     /// Copy password into clipboard on exit (with Enter key)
     #[clap(short, long)]
     pub clipboard: bool,

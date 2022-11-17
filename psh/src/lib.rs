@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::fs::{File, Permissions};
-use std::io::{BufRead, BufReader, Write};
+use std::fs::{self, File, Permissions};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
@@ -35,6 +35,13 @@ pub fn db_file() -> PathBuf {
     db_file.push(DB_FILE);
 
     db_file
+}
+
+fn db_tmp_file() -> PathBuf {
+    let db_file = db_file();
+    let mut db_tmp_file = db_file.into_os_string();
+    db_tmp_file.push(".tmp");
+    db_tmp_file.into()
 }
 
 fn hash_master_password(master_password: &str) -> Result<String> {
@@ -128,7 +135,7 @@ impl Psh {
         }
     }
 
-    pub fn write_new_alias_to_db(&mut self) -> Result<()> {
+    pub fn append_alias_to_db(&mut self) -> Result<()> {
         if let Some(alias_data) = &self.new_alias {
             let mut key = alias_data.encrypted_alias()
                 .expect("Alias was not encrypted")
@@ -141,6 +148,32 @@ impl Psh {
             db.write_all(&key.as_bytes())?;
         } else {
             bail!("Cannot write uninitialized alias data to DB");
+        }
+        Ok(())
+    }
+
+    pub fn remove_alias_from_db(&self, alias: &str) -> Result<()> {
+        if self.alias_is_known(alias) {
+            let alias_data = self.known_aliases.get(alias).unwrap();
+            let encrypted_alias = alias_data.encrypted_alias().unwrap();
+
+            let db = File::open(db_file())?;
+            let db_temp = File::create(db_tmp_file())?;
+            let user_only_perms = Permissions::from_mode(0o600);
+            db_temp.set_permissions(user_only_perms)?;
+
+            let reader = BufReader::new(&db);
+            let mut writer = BufWriter::new(&db_temp);
+
+            for line in reader.lines() {
+                let line = line.as_ref().unwrap();
+                if !line.contains(encrypted_alias) {
+                    writeln!(writer, "{}", line)?;
+                }
+            }
+            fs::rename(db_tmp_file(), db_file())?;
+        } else {
+            bail!(PshError::DbAliasRemovalError(alias.to_owned()));
         }
         Ok(())
     }
@@ -413,10 +446,14 @@ pub enum CharSet {
     Reduced,
 }
 
+// End-user facing errors
 #[derive(Error, Debug)]
 pub enum PshError {
     #[error("Unable to decode alias {0} as Base64: {1}")]
     DbAliasDecodeError(String, base64ct::Error),
+
+    #[error("Cannot remove alias `{0}` from db: alias does not exist")]
+    DbAliasRemovalError(String),
 
     #[error("Master password is too short (less than {} chars)", MASTER_PASSWORD_MIN_LEN)] //FIXME: not chars but bytes actually
     MasterPasswordTooShort,
