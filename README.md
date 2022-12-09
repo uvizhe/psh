@@ -20,7 +20,6 @@ Is to make attacks on *Psh* database harder: guessing a master password requires
 
 ## TODO
 
-* Use `zeroize` and/or `secrecy` crates
 * Integrate with `keyutils`/`libsecret`
 * Build binary for Termux and Android app
 

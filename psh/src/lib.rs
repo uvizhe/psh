@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::fs::{self, File, Permissions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::ops::{Deref, DerefMut};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
@@ -9,14 +11,11 @@ use aes::cipher::{
     BlockDecryptMut, BlockEncryptMut, KeyIvInit,
 };
 use anyhow::{bail, Result};
-use argon2::{
-    password_hash::{PasswordHasher, SaltString},
-    Algorithm, Argon2, ParamsBuilder, Version,
-};
+use argon2::{Algorithm, Argon2, Params, ParamsBuilder, Version};
 use base64ct::{Base64, Encoding};
 use once_cell::unsync::OnceCell;
-use sha2::{Digest, Sha256};
 use thiserror::Error;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 pub const ALIAS_MAX_LEN: usize = 79;
 pub const MASTER_PASSWORD_MIN_LEN: usize = 8;
@@ -44,7 +43,7 @@ fn db_tmp_file() -> PathBuf {
     db_tmp_file.into()
 }
 
-fn hash_master_password(master_password: &str) -> Result<String> {
+fn hash_master_password(master_password: ZeroizingString) -> Result<ZeroizingVec> {
     if master_password.len() < MASTER_PASSWORD_MIN_LEN {
         bail!(PshError::MasterPasswordTooShort);
     }
@@ -56,25 +55,26 @@ fn hash_master_password(master_password: &str) -> Result<String> {
     let argon2_params = argon2_params.params()
         .expect("Error getting Argon2 params");
 
-    let salt = Sha256::digest(master_password);
-    let salt = SaltString::b64_encode(&salt)
-        .expect("Error making a salt for master password");
+    let salt = [0u8; 16];
+    let mut buf = Zeroizing::new([0u8; Params::DEFAULT_OUTPUT_LEN]);
     let argon2 = Argon2::new(Algorithm::default(), Version::default(), argon2_params);
-    let hash = argon2.hash_password(&[], &salt)
+    argon2.hash_password_into(master_password.as_bytes(), &salt, &mut *buf)
         .expect("Error hashing master password");
 
-    Ok(hash.hash.unwrap().to_string())
+    let hashed_mp = buf.to_vec();
+
+    Ok(ZeroizingVec::new(hashed_mp))
 }
 
 pub struct Psh {
-    master_password: String,
-    known_aliases: HashMap<String, AliasData>,
+    master_password: ZeroizingVec,
+    known_aliases: HashMap<ZeroizingString, AliasData>,
     last_nonce: u32,
     new_alias: Option<AliasData>,
 }
 
 impl Psh {
-    pub fn new(master_password: &str) -> Result<Self> {
+    pub fn new(master_password: ZeroizingString) -> Result<Self> {
         let hashed_mp = hash_master_password(master_password)?;
 
         let mut psh = Self {
@@ -89,35 +89,39 @@ impl Psh {
         Ok(psh)
     }
 
+    fn master_password(&self) -> &ZeroizingVec {
+        &self.master_password
+    }
+
     fn get_aliases(&mut self) -> Result<()> {
         let db_file = db_file();
         if db_file.exists() {
             let db = File::open(db_file)?;
             let reader = BufReader::new(db);
             for line in reader.lines() {
-                let enc_alias = line?;
-                let alias_data = AliasData::new_known(enc_alias, &self.master_password)?;
+                let enc_alias = ZeroizingString::new(line?);
+                let alias_data = AliasData::new_known(&enc_alias, self.master_password())?;
 
                 self.last_nonce = alias_data.nonce();
 
-                self.known_aliases.insert(alias_data.alias().to_string(), alias_data);
+                self.known_aliases.insert(alias_data.alias().clone(), alias_data);
             }
         }
 
         Ok(())
     }
 
-    pub fn aliases(&self) -> Vec<&String> {
+    pub fn aliases(&self) -> Vec<&ZeroizingString> {
         self.known_aliases.keys().collect()
     }
 
-    pub fn alias_is_known(&self, alias: &str) -> bool {
+    pub fn alias_is_known(&self, alias: &ZeroizingString) -> bool {
         self.known_aliases.contains_key(alias)
     }
 
     /// # Panics
     /// Panics if `alias` is not present in DB.
-    pub fn alias_uses_secret(&self, alias: &str) -> bool {
+    pub fn alias_uses_secret(&self, alias: &ZeroizingString) -> bool {
         if let Some(alias_data) = self.known_aliases.get(alias) {
             alias_data.use_secret()
         } else {
@@ -127,7 +131,7 @@ impl Psh {
 
     /// # Panics
     /// Panics if `alias` is not present in DB.
-    pub fn get_charset(&self, alias: &str) -> CharSet {
+    pub fn get_charset(&self, alias: &ZeroizingString) -> CharSet {
         if let Some(alias_data) = self.known_aliases.get(alias) {
             alias_data.charset()
         } else {
@@ -146,13 +150,14 @@ impl Psh {
             let user_only_perms = Permissions::from_mode(0o600);
             db.set_permissions(user_only_perms)?;
             db.write_all(&key.as_bytes())?;
+            key.zeroize();
         } else {
             bail!("Cannot write uninitialized alias data to DB");
         }
         Ok(())
     }
 
-    pub fn remove_alias_from_db(&self, alias: &str) -> Result<()> {
+    pub fn remove_alias_from_db(&self, alias: &ZeroizingString) -> Result<()> {
         if self.alias_is_known(alias) {
             let alias_data = self.known_aliases.get(alias).unwrap();
             let encrypted_alias = alias_data.encrypted_alias().unwrap();
@@ -166,14 +171,14 @@ impl Psh {
             let mut writer = BufWriter::new(&db_temp);
 
             for line in reader.lines() {
-                let line = line.as_ref().unwrap();
-                if !line.contains(encrypted_alias) {
-                    writeln!(writer, "{}", line)?;
+                let enc_alias = ZeroizingString::new(line?);
+                if &enc_alias != encrypted_alias {
+                    writeln!(writer, "{}", enc_alias)?;
                 }
             }
             fs::rename(db_tmp_file(), db_file())?;
         } else {
-            bail!(PshError::DbAliasRemovalError(alias.to_owned()));
+            bail!(PshError::DbAliasRemovalError(alias.clone()));
         }
         Ok(())
     }
@@ -184,10 +189,10 @@ impl Psh {
     /// Panics if `alias` expects `secret` but None or empty string is given.
     pub fn construct_password(
         &mut self,
-        alias: &str,
-        secret: Option<String>, // move `secret` so client code doesn't have to mess with zeroizing memory
+        alias: &ZeroizingString,
+        secret: Option<ZeroizingString>,
         charset: CharSet,
-    ) -> String {
+    ) -> ZeroizingString {
         if alias.is_empty() {
             panic!("Alias cannot be empty");
         }
@@ -203,20 +208,23 @@ impl Psh {
             let nonce = self.get_new_nonce();
             use_secret = secret.is_some();
             let mut alias_data = AliasData::new(alias, nonce, use_secret, charset);
-            alias_data.encrypt_alias(&self.master_password); // FIXME: this can be done upon creation of alias_data
+            alias_data.encrypt_alias(self.master_password()); // FIXME: this can be done upon creation of alias_data
             self.new_alias = Some(alias_data);
         }
         if use_secret && (secret.is_none() || secret.as_ref().unwrap().is_empty()) {
             panic!("Secret must not be empty for this alias");
         }
 
-        let secret = secret.unwrap_or("".to_string());
-        let collected_bytes = self.collect_bytes(alias, &secret, charset);
+        let secret = secret.unwrap_or(ZeroizingString::new("".to_string()));
+        let collected_bytes = self.collect_bytes(alias, secret, charset);
         // Pick password bytes to satisfy charset
         let password_slice = Self::pick_suitable_slice(charset, collected_bytes);
 
-        String::from_utf8(password_slice)
-            .expect("Error producing password string from collected bytes")
+        ZeroizingString::new(
+            std::str::from_utf8(&password_slice)
+                .expect("Error producing password string from collected bytes")
+                .to_string()
+        )
     }
 
     fn get_new_nonce(&self) -> u32 {
@@ -229,44 +237,59 @@ impl Psh {
         }
     }
 
-    // Generates COLLECTED_BYTES_LEN bytes using argon2 hashing algorithm with hashed_mp + alias and secret as inputs.
-    fn collect_bytes(&self, alias: &str, secret: &str, charset: CharSet) -> Vec<u8> {
+    // Generates COLLECTED_BYTES_LEN bytes using argon2 hashing algorithm
+    // with hashed_mp + alias and secret as inputs.
+    fn collect_bytes(
+        &self,
+        alias: &ZeroizingString,
+        secret: ZeroizingString,
+        charset: CharSet,
+    ) -> ZeroizingVec {
         let mut argon2_params = ParamsBuilder::new();
         argon2_params.output_len(COLLECTED_BYTES_LEN)
             .expect("Error setting Argon2 output length");
         let argon2_params = argon2_params.params()
             .expect("Error getting Argon2 params");
+
+        let salt = [0u8; 16];
+        let mut buf = Zeroizing::new([0u8; COLLECTED_BYTES_LEN]);
         let argon2 = Argon2::new(Algorithm::default(), Version::default(), argon2_params);
-        let salt = Sha256::digest(self.master_password.clone() + alias);
-        let salt = SaltString::b64_encode(&salt)
-            .expect("Error making a salt for password");
-        let hash = argon2.hash_password(secret.as_ref(), &salt)
-            .expect("Error hashing master password");
-        let hash = hash.hash.unwrap();
+        let input = Zeroizing::new(
+            [
+                alias.as_bytes(),
+                secret.as_bytes(),
+                self.master_password(),
+            ].concat()
+        );
+        argon2.hash_password_into(&input, &salt, &mut *buf)
+            .expect("Error hashing with Argon2");
 
         let mut collected_bytes = Vec::new();
-        for byte in hash.as_bytes() {
+        for mut byte in *buf {
             // ASCII has 94 printable characters (excluding space) starting from 33rd.
-            let shifted = (*byte as u16) << 8;     // Shift value so it exceeds 94
-            let pos_relative = shifted % 94;      // Find relative position of a char in between 94 values
-            let pos_absolute = pos_relative + 33; // Shift it to a starting pos of "good" chars
+            let mut temp = (byte as u16) << 8; // Shift value so it exceeds 94
+            temp = temp % 94;         // Find relative position of a char in between 94 values
+            byte = (temp as u8) + 33; // Shift it to a starting pos of "good" chars
             match charset {
-                CharSet::Standard => collected_bytes.push(pos_absolute as u8),
+                CharSet::Standard => collected_bytes.push(byte),
                 CharSet::Reduced => {
-                    if (pos_absolute as u8).is_ascii_alphanumeric() {
-                        collected_bytes.push(pos_absolute as u8);
+                    if byte.is_ascii_alphanumeric() {
+                        collected_bytes.push(byte);
                     }
                 }
             }
+            temp.zeroize();
+            byte.zeroize();
         }
 
-        collected_bytes
+        ZeroizingVec::new(collected_bytes)
     }
 
-    // Checks Standard and Reduced set for inclusion of punctuation and numeric characters respectively.
-    // If the first chunk of `collected_bytes` does not meet the criterium tries to use next and so on.
-    fn pick_suitable_slice(charset: CharSet, collected_bytes: Vec<u8>) -> Vec<u8> {
-        let mut password_slice: Vec<u8> = vec![];
+    // Checks Standard and Reduced sets for inclusion of punctuation and numeric characters
+    // respectively. If the first chunk of `collected_bytes` does not meet the criterium,
+    // tries to use next and so on.
+    fn pick_suitable_slice(charset: CharSet, collected_bytes: ZeroizingVec) -> ZeroizingVec {
+        let mut password_slice = Vec::new();
         let slices = collected_bytes.chunks_exact(PASSWORD_LEN);
         for slice in slices {
             match charset {
@@ -294,23 +317,23 @@ impl Psh {
             password_slice = collected_bytes[last_chunk_pos..].to_vec();
         }
 
-        password_slice
+        ZeroizingVec::new(password_slice)
     }
 }
 
 #[derive(Debug)]
 struct AliasData {
-    alias: String,
-    encrypted_alias: OnceCell<String>,
+    alias: ZeroizingString,
+    encrypted_alias: OnceCell<ZeroizingString>,
     nonce: u32,
     use_secret: bool,
     charset: CharSet,
 }
 
 impl AliasData {
-    pub fn new(alias: &str, nonce: u32, use_secret: bool, charset: CharSet) -> Self {
+    pub fn new(alias: &ZeroizingString, nonce: u32, use_secret: bool, charset: CharSet) -> Self {
         Self {
-            alias: alias.to_string(),
+            alias: alias.clone(),
             encrypted_alias: OnceCell::new(),
             nonce,
             use_secret,
@@ -318,15 +341,15 @@ impl AliasData {
         }
     }
 
-    pub fn new_known(encrypted_alias: String, password: &str) -> Result<Self> {
+    pub fn new_known(encrypted_alias: &ZeroizingString, password: &ZeroizingVec) -> Result<Self> {
         Self::decrypt_alias(encrypted_alias, password)
     }
 
-    pub fn alias(&self) -> &str {
+    pub fn alias(&self) -> &ZeroizingString {
         &self.alias
     }
 
-    pub fn encrypted_alias(&self) -> Option<&String> {
+    pub fn encrypted_alias(&self) -> Option<&ZeroizingString> {
         self.encrypted_alias.get()
     }
 
@@ -385,27 +408,43 @@ impl AliasData {
         }
     }
 
-    fn encrypt_alias(&mut self, password: &str) {
+    fn encrypt_alias(&mut self, password: &ZeroizingVec) {
+        // Make all aliases the same length by padding them
         let alias = self.padded_alias();
 
-        let salt = password.to_string() + &self.nonce.to_string();
-        let salt = Sha256::digest(salt);
-        // In AES128 key size and iv size are the same, 16 bytes, half of SHA256
-        let (key, iv) = salt.split_at(16);
-        let mut buf = [0u8; ALIAS_MAX_LEN * 2];
-        let enc = Aes128CbcEnc::new(key.into(), iv.into())
-            .encrypt_padded_b2b_mut::<Pkcs7>(&alias, &mut buf)
+        // From hashed password and nonce derive DEFAULT_OUTPUT_LEN bytes for AES encryption
+        let salt = [0u8; 16];
+        let mut hasher_buf = Zeroizing::new([0u8; Params::DEFAULT_OUTPUT_LEN]);
+        let argon2 = Argon2::default();
+        let input = ZeroizingVec::new(
+            [
+                self.nonce().to_le_bytes().as_slice(),
+                password,
+            ].concat()
+        );
+        argon2.hash_password_into(&input, &salt, &mut *hasher_buf)
+            .expect("Error hashing with Argon2");
+
+        // In AES128 key size and IV size are the same, 16 bytes, half of default argon2 output len
+        let (key, iv) = hasher_buf.split_at(16);
+        let mut encrypter_buf = Zeroizing::new([0u8; ALIAS_MAX_LEN * 2]);
+        let encrypted = Aes128CbcEnc::new(key.into(), iv.into())
+            .encrypt_padded_b2b_mut::<Pkcs7>(&alias, &mut *encrypter_buf)
             .unwrap();
-        let enc = &[&self.encode_nonce_and_flags(), enc].concat();
-        buf = [0u8; ALIAS_MAX_LEN * 2];
-        let enc = Base64::encode(enc, &mut buf).unwrap();
-        self.encrypted_alias.set(enc.to_string()).unwrap();
+
+        // Concatenate encrypted alias with service data and encode with base64
+        let alias_rec_bytes = Zeroizing::new(
+            [&self.encode_nonce_and_flags(), encrypted].concat()
+        );
+        let mut encoder_buf = Zeroizing::new([0u8; ALIAS_MAX_LEN * 2]);
+        let alias_rec = Base64::encode(&alias_rec_bytes, &mut *encoder_buf).unwrap();
+        self.encrypted_alias.set(ZeroizingString::new(alias_rec.to_string())).unwrap();
     }
 
-    fn decrypt_alias(encrypted_alias: String, password: &str) -> Result<Self> {
+    fn decrypt_alias(encrypted_alias: &ZeroizingString, password: &ZeroizingVec) -> Result<Self> {
         // Decode base64 alias data representation
-        let mut buf = [0u8; ALIAS_MAX_LEN * 2];
-        let enc_alias = Base64::decode(&encrypted_alias.as_bytes(), &mut buf)
+        let mut decoder_buf = Zeroizing::new([0u8; ALIAS_MAX_LEN * 2]);
+        let enc_alias = Base64::decode(&encrypted_alias.as_bytes(), &mut *decoder_buf)
             .map_err(|err| PshError::DbAliasDecodeError(encrypted_alias.clone(), err))?;
 
         let nonce = Self::extract_nonce(&enc_alias);
@@ -413,23 +452,37 @@ impl AliasData {
         let charset = Self::extract_charset(&enc_alias);
 
         // Decrypt alias
-        let salt = password.to_string() + &nonce.to_string();
-        let salt = Sha256::digest(salt);
-        // In AES128 key size and iv size are the same, 16 bytes, half of SHA256
-        let (key, iv) = salt.split_at(16);
-        let mut buf = [0u8; ALIAS_MAX_LEN * 2];
+        let salt = [0u8; 16];
+        let mut hasher_buf = Zeroizing::new([0u8; Params::DEFAULT_OUTPUT_LEN]);
+        let argon2 = Argon2::default();
+        let input = ZeroizingVec::new(
+            [
+                nonce.to_le_bytes().as_slice(),
+                password,
+            ].concat()
+        );
+        argon2.hash_password_into(&input, &salt, &mut *hasher_buf)
+            .expect("Error hashing with Argon2");
+        // In AES128 key size and IV size are the same, 16 bytes, half of default argon2 output len
+        let (key, iv) = hasher_buf.split_at(16);
+        let mut decrypter_buf = Zeroizing::new([0u8; ALIAS_MAX_LEN * 2]);
         let dec_result = Aes128CbcDec::new(key.into(), iv.into())
-            .decrypt_padded_b2b_mut::<Pkcs7>(&enc_alias[4..], &mut buf);
+            .decrypt_padded_b2b_mut::<Pkcs7>(&enc_alias[4..], &mut *decrypter_buf);
         match dec_result {
             Ok(dec) => {
-                let alias_bytes: Vec<u8> = dec.iter()
-                    .filter(|x| **x != 0x0) // Unpad ZeroPadding
-                    .map(|&x| x)
-                    .collect();
-                let alias = String::from_utf8(alias_bytes)?;
+                let alias_bytes = ZeroizingVec::new(
+                    dec.iter()
+                        .filter(|x| **x != 0x0) // Unpad ZeroPadding
+                        .map(|&x| x)
+                        .collect()
+                );
+                let alias = ZeroizingString::new(
+                    std::str::from_utf8(&alias_bytes)?
+                        .to_string()
+                );
                 Ok(Self {
                     alias,
-                    encrypted_alias: OnceCell::with_value(encrypted_alias),
+                    encrypted_alias: OnceCell::with_value(encrypted_alias.clone()),
                     nonce,
                     use_secret,
                     charset,
@@ -446,14 +499,68 @@ pub enum CharSet {
     Reduced,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq, ZeroizeOnDrop)]
+pub struct ZeroizingString {
+    string: String,
+}
+
+impl ZeroizingString {
+    pub fn new(string: String) -> Self {
+        Self {
+            string,
+        }
+    }
+}
+
+impl Deref for ZeroizingString {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.string
+    }
+}
+
+impl DerefMut for ZeroizingString {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.string
+    }
+}
+
+impl fmt::Display for ZeroizingString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.string)
+    }
+}
+
+#[derive(ZeroizeOnDrop)]
+struct ZeroizingVec {
+    vec: Vec<u8>,
+}
+
+impl ZeroizingVec {
+    fn new(vec: Vec<u8>) -> Self {
+        Self {
+            vec,
+        }
+    }
+}
+
+impl Deref for ZeroizingVec {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.vec
+    }
+}
+
 // End-user facing errors
 #[derive(Error, Debug)]
 pub enum PshError {
     #[error("Unable to decode alias {0} as Base64: {1}")]
-    DbAliasDecodeError(String, base64ct::Error),
+    DbAliasDecodeError(ZeroizingString, base64ct::Error),
 
     #[error("Cannot remove alias `{0}` from db: alias does not exist")]
-    DbAliasRemovalError(String),
+    DbAliasRemovalError(ZeroizingString),
 
     #[error("Master password is too short (less than {} chars)", MASTER_PASSWORD_MIN_LEN)] //FIXME: not chars but bytes actually
     MasterPasswordTooShort,

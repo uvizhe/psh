@@ -16,7 +16,7 @@ fn main() {
 
     let master_password = prompt_master_password();
 
-    let mut psh = match Psh::new(&master_password) {
+    let mut psh = match Psh::new(master_password) {
         Ok(psh) => psh,
         Err(error) => {
             term.write_line(&error.to_string()).unwrap();
@@ -83,7 +83,7 @@ fn main() {
                 // TODO: use `x11-clipboard` instead of `clipboard`?
                 let mut clipboard: ClipboardContext = ClipboardProvider::new()
                     .expect("Error getting clipboard provider");
-                clipboard.set_contents(password.clone())
+                clipboard.set_contents(password.to_string())
                     .expect("Error setting clipboard contents");
                 // XXX: Without this sleep clipboard contents don't set for some reason
                 thread::sleep(Duration::from_millis(10));

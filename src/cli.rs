@@ -7,7 +7,7 @@ use clap::{AppSettings, ArgGroup, Parser};
 use console::Term;
 use dialoguer::{Confirm, Input, Select, Password, theme::Theme};
 
-use psh::{Psh, CharSet, db_file, ALIAS_MAX_LEN, MASTER_PASSWORD_MIN_LEN};
+use psh::{Psh, CharSet, ZeroizingString, db_file, ALIAS_MAX_LEN, MASTER_PASSWORD_MIN_LEN};
 
 const SAFEGUARD_TIMEOUT: u64 = 120;
 
@@ -24,7 +24,7 @@ const SAFEGUARD_TIMEOUT: u64 = 120;
 pub struct Cli {
     /// Alias to use
     #[clap(value_parser = trim_string)]
-    pub alias: Option<String>,
+    pub alias: Option<ZeroizingString>,
 
     /// List all aliases stored in database
     #[clap(short, long)]
@@ -43,14 +43,14 @@ pub struct Cli {
     pub paranoid: bool,
 }
 
-fn trim_string(value: &str) -> Result<String, String> {
+fn trim_string(value: &str) -> Result<ZeroizingString, String> {
     let value = value.trim();
     if value.is_empty() {
         Err("Empty string".to_string())
     } else if value.len() > ALIAS_MAX_LEN {
         Err(format!("Alias too long. Must be {} bytes at most", ALIAS_MAX_LEN))
     } else {
-        Ok(value.to_string())
+        Ok(ZeroizingString::new(value.to_string()))
     }
 }
 
@@ -67,7 +67,7 @@ impl Theme for PshTheme {
     }
 }
 
-pub fn prompt_master_password() -> String {
+pub fn prompt_master_password() -> ZeroizingString {
     let mut password_prompt = Password::new();
     let master_password_prompt =
         if db_file().exists() {
@@ -86,34 +86,40 @@ pub fn prompt_master_password() -> String {
                 .with_confirmation("Repeat password", "Passwords mismatch")
         };
 
-    let master_password = master_password_prompt
-        .interact()
-        .unwrap();
+    let master_password = ZeroizingString::new(
+        master_password_prompt
+            .interact()
+            .unwrap()
+    );
 
     master_password
 }
 
-pub fn prompt_alias() -> String {
+pub fn prompt_alias() -> ZeroizingString {
     let theme = PshTheme;
 
-    let alias = Input::with_theme(&theme)
-        .with_prompt("Alias")
-        .validate_with(|input: &String| {
-            let input = input.trim();
-            if input.is_empty() {
-                Err("Alias cannot be empty".to_string())
-            } else if input.len() > ALIAS_MAX_LEN {
-                Err(format!("Alias too long. Must be {} bytes at most", ALIAS_MAX_LEN))
-            } else {
-                Ok(())
-            }
-        })
-        .interact_text()
-        .unwrap();
+    let alias = ZeroizingString::new(
+        Input::with_theme(&theme)
+            .with_prompt("Alias")
+            .validate_with(|input: &String| {
+                let input = input.trim();
+                if input.is_empty() {
+                    Err("Alias cannot be empty".to_string())
+                } else if input.len() > ALIAS_MAX_LEN {
+                    Err(format!("Alias too long. Must be {} bytes at most", ALIAS_MAX_LEN))
+                } else {
+                    Ok(())
+                }
+            })
+            .interact_text()
+            .unwrap()
+    );
 
-    alias
-        .trim()
-        .to_string()
+    ZeroizingString::new(
+        alias
+            .trim()
+            .to_string()
+    )
 }
 
 pub fn prompt_charset() -> CharSet {
@@ -142,11 +148,13 @@ pub fn prompt_secret_use() -> bool {
         .unwrap()
 }
 
-pub fn prompt_secret() -> String {
-    Password::new()
-        .with_prompt("Secret")
-        .interact()
-        .unwrap()
+pub fn prompt_secret() -> ZeroizingString {
+    ZeroizingString::new(
+        Password::new()
+            .with_prompt("Secret")
+            .interact()
+            .unwrap()
+    )
 }
 
 pub fn print_aliases(psh: &Psh) {
