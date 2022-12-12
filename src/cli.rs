@@ -124,13 +124,13 @@ pub fn prompt_alias() -> ZeroizingString {
 
 pub fn prompt_charset() -> CharSet {
     let charset: CharSet;
-    let sets = vec![CharSet::Standard, CharSet::Reduced];
+    let sets = vec![CharSet::Standard, CharSet::Reduced, CharSet::RequireAll];
 
     let choice = Select::new()
         .with_prompt("Looks like you use this alias for the first time.
 Please, select preferred character set for passwords for this alias.
-NOTE: Standard character set consists of all printable ASCII characters while Reduced set includes only letters and digits")
-        .items(&vec!["Standard", "Reduced"])
+NOTE: Standard character set can include all printable ASCII characters while Reduced set includes only letters and digits. RequireAll set guarantees that password will include characters of all types (digit, lowercase letter, uppercase letter and punctuation)")
+        .items(&vec!["Standard", "Reduced", "RequireAll"])
         .default(0)
         .interact()
         .unwrap();

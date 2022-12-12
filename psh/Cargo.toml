@@ -9,6 +9,7 @@ aes = { version = "0.8.2", features = ["zeroize"] }
 anyhow = "1.0.64"
 argon2 = { version = "0.4.1", features = ["alloc", "zeroize"] }
 base64ct = "1.5.2"
+bitvec = "1.0.1"
 cbc = { version = "0.1.2", features = ["zeroize"] }
 home = "0.5.3"
 once_cell = "1.14.0"

@@ -66,7 +66,7 @@ fn main() {
                 None
             };
 
-        let password = psh.construct_password(&alias, secret, charset);
+        let password = psh.derive_password(&alias, secret, charset);
 
         let mut output_password = password.clone();
         if cli.paranoid {

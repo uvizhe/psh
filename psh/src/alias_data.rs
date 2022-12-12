@@ -70,13 +70,18 @@ impl AliasData {
 
     fn encode_nonce_and_flags(&self) -> Vec<u8> {
         let mut nonce_and_flags = self.nonce;
-        nonce_and_flags <<= 2;
-        // Lower security choices set flags to 1, defaults (0) are the most secure
+        nonce_and_flags <<= 8;
+        // There are 8 bits to encode various flags:
+        // LSB 0 is for secret flag: whether to use secret or not
+        // (0 = use secret, 1 = do not use secret)
         if !self.use_secret {
             nonce_and_flags |= 1;
         }
-        if self.charset == CharSet::Reduced {
-            nonce_and_flags |= 1 << 1;
+        // CharSet uses LSB 1,2 (00 = Standard, 01 = Reduced, 10 = RequireAll)
+        match self.charset {
+            CharSet::Standard => {},
+            CharSet::Reduced => nonce_and_flags |= 1 << 1,
+            CharSet::RequireAll => nonce_and_flags |= 1 << 2,
         }
         nonce_and_flags.to_le_bytes().to_vec()
     }
@@ -84,7 +89,7 @@ impl AliasData {
     fn extract_nonce(encrypted_alias: &[u8]) -> u32 {
         let nonce: [u8; 4] = encrypted_alias[0..4].try_into().unwrap();
         let nonce = u32::from_le_bytes(nonce);
-        nonce >> 2
+        nonce >> 8
     }
 
     fn extract_secret_flag(encrypted_alias: &[u8]) -> bool {
@@ -97,9 +102,12 @@ impl AliasData {
 
     fn extract_charset(encrypted_alias: &[u8]) -> CharSet {
         let bit_flags: u8 = encrypted_alias[0].try_into().unwrap();
-        match bit_flags & (1 << 1) {
-            0 => CharSet::Standard, // 1st bit isn't set => Standard
-            _ => CharSet::Reduced,  // 1st bit is set => Reduced
+        let charset_bits = bit_flags & (3 << 1);
+        match charset_bits >> 1 {
+            0 => CharSet::Standard,   // 00 => Standard
+            1 => CharSet::Reduced,    // 01 => Reduced
+            2 => CharSet::RequireAll, // 10 => RequireAll
+            _ => unreachable!("Undefined CharSet"),
         }
     }
 

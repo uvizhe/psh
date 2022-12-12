@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 use argon2::{Algorithm, Argon2, Params, ParamsBuilder, Version};
+use bitvec::prelude::*;
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -21,6 +22,17 @@ const PASSWORD_LEN: usize = 16;
 const COLLECTED_BYTES_LEN: usize = 64;
 const MASTER_PASSWORD_MEM_COST: u32 = 64 * 1024;
 const MASTER_PASSWORD_TIME_COST: u32 = 10;
+
+const SYMBOLS: [char; 104] = [
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', // Skip this line for Standard set
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+    'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U' ,'V', 'W', 'X', 'Y', 'Z',
+    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
+    'n', 'o', 'p', 'q', 'r', 's', 't', 'u' ,'v', 'w', 'x', 'y', 'z',
+    '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/', ':',
+    ';', '<', '=', '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~',
+];
 
 pub fn db_file() -> PathBuf {
     let mut db_file = home::home_dir()
@@ -74,7 +86,7 @@ impl Psh {
         let mut psh = Self {
             master_password: hashed_mp,
             known_aliases: HashMap::new(),
-            last_nonce: u32::MAX >> 2, // max nonce is 2^30 - 1
+            last_nonce: u32::MAX >> 8, // max nonce is 2^24 - 1
             new_alias: None,
         };
 
@@ -181,7 +193,7 @@ impl Psh {
     /// Panics if `alias` is an empty string.
     /// Panics if `alias` is longer than ALIAS_MAX_LEN.
     /// Panics if `alias` expects `secret` but None or empty string is given.
-    pub fn construct_password(
+    pub fn derive_password(
         &mut self,
         alias: &ZeroizingString,
         secret: Option<ZeroizingString>,
@@ -210,21 +222,21 @@ impl Psh {
         }
 
         let secret = secret.unwrap_or(ZeroizingString::new("".to_string()));
-        let collected_bytes = self.collect_bytes(alias, secret, charset);
-        // Pick password bytes to satisfy charset
-        let password_slice = Self::pick_suitable_slice(charset, collected_bytes);
-
-        ZeroizingString::new(
-            std::str::from_utf8(&password_slice)
-                .expect("Error producing password string from collected bytes")
-                .to_string()
-        )
+        let mut local_nonce = 0;
+        let password = loop {
+            let bytes = self.generate_bytes(alias, &secret, local_nonce);
+            if let Ok(password_string) = Self::produce_password(charset, bytes) {
+                break password_string
+            }
+            local_nonce += 1;
+        };
+        password
     }
 
     fn get_new_nonce(&self) -> u32 {
-        if self.last_nonce > u32::MAX >> 2 {
-            panic!("Nonce must not be higher than u32::MAX >> 2, check your code");
-        } else if self.last_nonce == u32::MAX >> 2 {
+        if self.last_nonce > u32::MAX >> 8 {
+            panic!("Nonce must not be higher than u32::MAX >> 8");
+        } else if self.last_nonce == u32::MAX >> 8 {
             0
         } else {
             self.last_nonce + 1
@@ -233,11 +245,11 @@ impl Psh {
 
     // Generates COLLECTED_BYTES_LEN bytes using argon2 hashing algorithm
     // with hashed_mp + alias and secret as inputs.
-    fn collect_bytes(
+    fn generate_bytes(
         &self,
         alias: &ZeroizingString,
-        secret: ZeroizingString,
-        charset: CharSet,
+        secret: &ZeroizingString,
+        nonce: usize,
     ) -> ZeroizingVec {
         let mut argon2_params = ParamsBuilder::new();
         argon2_params.output_len(COLLECTED_BYTES_LEN)
@@ -252,66 +264,62 @@ impl Psh {
             [
                 alias.as_bytes(),
                 secret.as_bytes(),
+                nonce.to_le_bytes().as_slice(),
                 self.master_password(),
             ].concat()
         );
         argon2.hash_password_into(&input, &salt, &mut *buf)
             .expect("Error hashing with Argon2");
 
-        let mut collected_bytes = Vec::new();
-        for mut byte in *buf {
-            // ASCII has 94 printable characters (excluding space) starting from 33rd.
-            let mut temp = (byte as u16) << 8; // Shift value so it exceeds 94
-            temp = temp % 94;         // Find relative position of a char in between 94 values
-            byte = (temp as u8) + 33; // Shift it to a starting pos of "good" chars
-            match charset {
-                CharSet::Standard => collected_bytes.push(byte),
-                CharSet::Reduced => {
-                    if byte.is_ascii_alphanumeric() {
-                        collected_bytes.push(byte);
-                    }
-                }
-            }
-            temp.zeroize();
-            byte.zeroize();
-        }
-
-        ZeroizingVec::new(collected_bytes)
+        ZeroizingVec::new(buf.to_vec())
     }
 
-    // Checks Standard and Reduced sets for inclusion of punctuation and numeric characters
-    // respectively. If the first chunk of `collected_bytes` does not meet the criterium,
-    // tries to use next and so on.
-    fn pick_suitable_slice(charset: CharSet, collected_bytes: ZeroizingVec) -> ZeroizingVec {
-        let mut password_slice = Vec::new();
-        let slices = collected_bytes.chunks_exact(PASSWORD_LEN);
-        for slice in slices {
-            match charset {
-                CharSet::Standard => {
-                    // Check if Standard set password include punctuation characters
-                    // (chance it's not is (62/94)^PASSWORD_LEN)
-                    if slice.iter().any(|b| b.is_ascii_punctuation()) {
-                        password_slice = slice.to_vec();
-                        break;
-                    }
+    // Iterate over 7-bit windows of input bytes gathering symbols
+    // for password using SYMBOLS table.
+    fn produce_password(charset: CharSet, bytes: ZeroizingVec) -> Result<ZeroizingString> {
+        let mut password_chars: Zeroizing<Vec<char>> = Zeroizing::new(Vec::new());
+        let bv = BitSlice::<_, Msb0>::from_slice(&bytes);
+        let mut bv_iter = bv.windows(7);
+        while let Some(bits) = bv_iter.next() {
+            let mut pos: usize = bits.load_be();
+            if pos < charset.len() {
+                // Skip first 10 (duplicate) symbols for Standard set
+                if charset == CharSet::Standard {
+                    pos += 10;
                 }
-                CharSet::Reduced => {
-                    // Check if Reduced set password include numeric characters
-                    // (chance it's not is (52/62)^PASSWORD_LEN)
-                    if slice.iter().any(|b| b.is_ascii_digit()) {
-                        password_slice = slice.to_vec();
-                        break;
+                password_chars.push(SYMBOLS[pos]);
+                // Skip 6 bits + 1 with iteration = 7 bits of current `bits`
+                bv_iter.nth(5);
+            } else {
+                // If `pos` >= `charset.len()`
+                // -for Reduced set we know that MSB 0 = '1' and at least one of MSB 1,2,3 = '1'
+                // -for Standard set we know that MSB 0,1 = '1'
+                // -for RequireAll set we know that MSB 0,1 = '1' and at least one of MSB 2,3 = '1'
+                // So skip 3 bits + 1 with iteration, because they are predetermined to some extent
+                bv_iter.nth(2);
+                continue;
+            }
+            if password_chars.len() == PASSWORD_LEN {
+                match charset {
+                    CharSet::Reduced | CharSet::Standard => break,
+                    CharSet::RequireAll => {
+                        if password_chars.iter().any(|b| b.is_ascii_digit())
+                                && password_chars.iter().any(|b| b.is_ascii_lowercase())
+                                && password_chars.iter().any(|b| b.is_ascii_uppercase())
+                                && password_chars.iter().any(|b| b.is_ascii_punctuation()) {
+                            break;
+                        } else {
+                            // Start over
+                            password_chars.clear();
+                        }
                     }
                 }
             }
         }
-        if password_slice.is_empty() {
-            // Last resort (just take last PASSWORD_LEN bytes from `collected_bytes`)
-            let last_chunk_pos = collected_bytes.len() - PASSWORD_LEN;
-            password_slice = collected_bytes[last_chunk_pos..].to_vec();
+        if password_chars.len() < PASSWORD_LEN {
+            bail!("Not enough input data")
         }
-
-        ZeroizingVec::new(password_slice)
+        Ok(ZeroizingString::new(password_chars.iter().collect()))
     }
 }
 
@@ -319,6 +327,17 @@ impl Psh {
 pub enum CharSet {
     Standard,
     Reduced,
+    RequireAll,
+}
+
+impl CharSet {
+    fn len(&self) -> usize {
+        match self {
+            Self::Standard => 94,
+            Self::Reduced => 72,
+            Self::RequireAll => 104,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, ZeroizeOnDrop)]
