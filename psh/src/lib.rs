@@ -293,9 +293,9 @@ impl Psh {
             } else {
                 // If `pos` >= `charset.len()`
                 // -for Reduced set we know that MSB 0 = '1' and at least one of MSB 1,2,3 = '1'
-                // -for Standard set we know that MSB 0,1 = '1'
+                // -for Standard set we know that MSB 0 = '1' and MSB 1 very likely = '1'
                 // -for RequireAll set we know that MSB 0,1 = '1' and at least one of MSB 2,3 = '1'
-                // So skip 3 bits + 1 with iteration, because they are predetermined to some extent
+                // So skip 3 bits + 1 with iteration, because they are largely predetermined
                 bv_iter.nth(2);
                 continue;
             }
@@ -408,4 +408,47 @@ pub enum PshError {
 
     #[error("Wrong master password")]
     MasterPasswordWrong,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_case::test_case;
+
+    #[test]
+    fn produce_password_fails_with_not_enough_bytes() {
+        let bytes = ZeroizingVec::new([0u8; 13].to_vec()); // not enough bytes to produce password
+        let charset = CharSet::Standard;
+        let result = Psh::produce_password(charset, bytes);
+        assert!(result.is_err());
+    }
+
+    #[test_case([0u8; 14], CharSet::Standard => "0000000000000000"; "zeros produce zeros")]
+    #[test_case([2,4,8,16,32,64,129,2,4,8,16,32,64,129], CharSet::Standard
+        => "1111111111111111"; "boolean 1 every 7 bits gives all 1s")]
+    fn produce_password_with_14_bytes(bytes: [u8; 14], charset: CharSet) -> String {
+        let bytes = ZeroizingVec::new(bytes.to_vec());
+        Psh::produce_password(charset, bytes)
+            .unwrap()
+            .to_string()
+    }
+
+    #[test_case([224,0,65,4,16,65,4,0,0,65,4,16,65,4,0,0], CharSet::Standard
+        => "01248GW#01248GW#"; "1st byte out of symbol table range (Standard set)")]
+    #[test_case([224,0,65,4,16,65,4,0,0,65,4,16,65,4,0,0], CharSet::Reduced
+        => "012486Ms012486Ms"; "1st byte out of symbol table range (Reduced set)")]
+    #[test_case([236,0,65,4,16,65,4,0,0,65,4,16,65,4,0,0], CharSet::RequireAll
+        => "]12486Ms012486Ms"; "1st byte out of symbol table range (RequireAll set)")]
+    #[test_case([204,204,192,0,0,0,0,0,0,0,0,0,0,0,0,0], CharSet::Standard
+        => panics "Not enough"; "not enough input data (Standard set)")]
+    #[test_case([204,204,192,0,0,0,0,0,0,0,0,0,0,0,0,0], CharSet::Reduced
+        => panics "Not enough"; "not enough input data (Reduced set)")]
+    #[test_case([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], CharSet::RequireAll
+        => panics "Not enough"; "not enough input data (RequireAll set)")]
+    fn produce_password(bytes: [u8; 16], charset: CharSet) -> String {
+        let bytes = ZeroizingVec::new(bytes.to_vec());
+        Psh::produce_password(charset, bytes)
+            .unwrap()
+            .to_string()
+    }
 }
