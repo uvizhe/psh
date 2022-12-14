@@ -75,8 +75,8 @@ impl AliasData {
         nonce_and_flags <<= Nonce::UNUSED_BITS;
         // There are 8 (UNUSED_BITS) bits to encode various flags:
         // LSB 0 is for secret flag: whether to use secret or not
-        // (0 = use secret, 1 = do not use secret)
-        if !self.use_secret {
+        // (1 = use secret, 0 = do not use secret)
+        if self.use_secret {
             nonce_and_flags |= 1;
         }
         // CharSet uses LSB 1,2 (00 = Standard, 01 = Reduced, 10 = RequireAll)
@@ -97,8 +97,8 @@ impl AliasData {
     fn extract_secret_flag(encrypted_alias: &[u8]) -> bool {
         let bit_flags: u8 = encrypted_alias[0].try_into().unwrap();
         match bit_flags & 1 {
-            0 => false, // zero bit isn't set => use secret
-            _ => true,  // zero bit is set => do not use secret
+            0 => false, // zero bit isn't set => do not use secret
+            _ => true,  // zero bit is set => use secret
         }
     }
 
@@ -153,7 +153,7 @@ impl AliasData {
             .map_err(|err| PshError::DbAliasDecodeError(encrypted_alias.clone(), err))?;
 
         let nonce = Self::extract_nonce(&enc_alias);
-        let use_secret = !Self::extract_secret_flag(&enc_alias);
+        let use_secret = Self::extract_secret_flag(&enc_alias);
         let charset = Self::extract_charset(&enc_alias);
 
         // Decrypt alias
