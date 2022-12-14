@@ -13,7 +13,7 @@ use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 mod alias_data;
-use alias_data::AliasData;
+use alias_data::{AliasData, Nonce};
 
 pub const ALIAS_MAX_LEN: usize = 79;
 pub const MASTER_PASSWORD_MIN_LEN: usize = 8;
@@ -75,7 +75,7 @@ fn hash_master_password(master_password: ZeroizingString) -> Result<ZeroizingVec
 pub struct Psh {
     master_password: ZeroizingVec,
     known_aliases: HashMap<ZeroizingString, AliasData>,
-    last_nonce: u32,
+    last_nonce: Option<Nonce>,
     new_alias: Option<AliasData>,
 }
 
@@ -86,7 +86,7 @@ impl Psh {
         let mut psh = Self {
             master_password: hashed_mp,
             known_aliases: HashMap::new(),
-            last_nonce: u32::MAX >> 8, // max nonce is 2^24 - 1
+            last_nonce: None,
             new_alias: None,
         };
 
@@ -108,7 +108,7 @@ impl Psh {
                 let enc_alias = ZeroizingString::new(line?);
                 let alias_data = AliasData::new_known(&enc_alias, self.master_password())?;
 
-                self.last_nonce = alias_data.nonce();
+                self.last_nonce = Some(alias_data.nonce());
 
                 self.known_aliases.insert(alias_data.alias().clone(), alias_data);
             }
@@ -211,9 +211,15 @@ impl Psh {
             let alias_data = self.known_aliases.get(alias).unwrap();
             use_secret = alias_data.use_secret();
         } else {
-            let nonce = self.get_new_nonce();
+            self.last_nonce = self.last_nonce
+                .and_then(|n| Some(n.increment())) // increment nonce if it is initialized
+                .or(Some(Nonce::new(0)));          // or initialize it otherwise
             use_secret = secret.is_some();
-            let mut alias_data = AliasData::new(alias, nonce, use_secret, charset);
+            let mut alias_data = AliasData::new(
+                alias,
+                self.last_nonce.unwrap(),
+                use_secret,
+                charset);
             alias_data.encrypt_alias(self.master_password()); // FIXME: this can be done upon creation of alias_data
             self.new_alias = Some(alias_data);
         }
@@ -231,16 +237,6 @@ impl Psh {
             local_nonce += 1;
         };
         password
-    }
-
-    fn get_new_nonce(&self) -> u32 {
-        if self.last_nonce > u32::MAX >> 8 {
-            panic!("Nonce must not be higher than u32::MAX >> 8");
-        } else if self.last_nonce == u32::MAX >> 8 {
-            0
-        } else {
-            self.last_nonce + 1
-        }
     }
 
     // Generates COLLECTED_BYTES_LEN bytes using argon2 hashing algorithm

@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use aes::cipher::{
     block_padding::Pkcs7,
     BlockDecryptMut, BlockEncryptMut, KeyIvInit,
@@ -20,13 +22,13 @@ type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 pub(crate) struct AliasData {
     alias: ZeroizingString,
     encrypted_alias: OnceCell<ZeroizingString>,
-    nonce: u32,
+    nonce: Nonce,
     use_secret: bool,
     charset: CharSet,
 }
 
 impl AliasData {
-    pub fn new(alias: &ZeroizingString, nonce: u32, use_secret: bool, charset: CharSet) -> Self {
+    pub fn new(alias: &ZeroizingString, nonce: Nonce, use_secret: bool, charset: CharSet) -> Self {
         Self {
             alias: alias.clone(),
             encrypted_alias: OnceCell::new(),
@@ -48,7 +50,7 @@ impl AliasData {
         self.encrypted_alias.get()
     }
 
-    pub fn nonce(&self) -> u32 {
+    pub fn nonce(&self) -> Nonce {
         self.nonce
     }
 
@@ -69,9 +71,9 @@ impl AliasData {
     }
 
     fn encode_nonce_and_flags(&self) -> Vec<u8> {
-        let mut nonce_and_flags = self.nonce;
-        nonce_and_flags <<= 8;
-        // There are 8 bits to encode various flags:
+        let mut nonce_and_flags = *self.nonce();
+        nonce_and_flags <<= Nonce::UNUSED_BITS;
+        // There are 8 (UNUSED_BITS) bits to encode various flags:
         // LSB 0 is for secret flag: whether to use secret or not
         // (0 = use secret, 1 = do not use secret)
         if !self.use_secret {
@@ -89,7 +91,7 @@ impl AliasData {
     fn extract_nonce(encrypted_alias: &[u8]) -> u32 {
         let nonce: [u8; 4] = encrypted_alias[0..4].try_into().unwrap();
         let nonce = u32::from_le_bytes(nonce);
-        nonce >> 8
+        nonce >> Nonce::UNUSED_BITS
     }
 
     fn extract_secret_flag(encrypted_alias: &[u8]) -> bool {
@@ -186,12 +188,54 @@ impl AliasData {
                 Ok(Self {
                     alias,
                     encrypted_alias: OnceCell::with_value(encrypted_alias.clone()),
-                    nonce,
+                    nonce: Nonce::new(nonce),
                     use_secret,
                     charset,
                 })
             }
             Err(_) => bail!(PshError::MasterPasswordWrong),
         }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct Nonce(u32);
+
+impl Nonce {
+    pub const UNUSED_BITS: u8 = 8;
+
+    pub fn new(nonce: u32) -> Self {
+        Self(nonce)
+    }
+
+    pub fn increment(mut self) -> Self {
+        self.0 =
+            if self.0 == u32::MAX >> Self::UNUSED_BITS {
+                0
+            } else {
+                self.0 + 1
+            };
+        self
+    }
+}
+
+impl Deref for Nonce {
+    type Target = u32;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_case::test_case;
+
+    #[test_case(0 => 1)]
+    #[test_case(16_777_215 => 0)]
+    fn increment_nonce(nonce: u32) -> u32 {
+        let n = Nonce::new(nonce);
+        *n.increment()
     }
 }
