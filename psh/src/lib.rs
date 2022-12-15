@@ -220,7 +220,7 @@ impl Psh {
                 self.last_nonce.unwrap(),
                 use_secret,
                 charset);
-            alias_data.encrypt_alias(self.master_password()); // FIXME: this can be done upon creation of alias_data
+            alias_data.encrypt_alias(self.master_password());
             self.new_alias = Some(alias_data);
         }
         if use_secret && (secret.is_none() || secret.as_ref().unwrap().is_empty()) {
