@@ -1,3 +1,4 @@
+use std::process;
 use std::thread;
 use std::time::Duration;
 
@@ -20,7 +21,7 @@ fn main() {
         Ok(psh) => psh,
         Err(error) => {
             term.write_line(&error.to_string()).unwrap();
-            return;
+            process::exit(1);
         }
     };
 
@@ -31,10 +32,10 @@ fn main() {
         let alias = cli.alias
             .expect("Alias is not given");
         match psh.remove_alias_from_db(&alias) {
-            Ok(()) => return, // FIXME: use different exit codes
+            Ok(()) => return,
             Err(error) => {
                 term.write_line(&error.to_string()).unwrap();
-                return; // FIXME: use different exit codes
+                process::exit(1);
             }
         }
     } else {
