@@ -50,7 +50,7 @@ fn db_tmp_file() -> PathBuf {
 }
 
 fn hash_master_password(master_password: ZeroizingString) -> Result<ZeroizingVec> {
-    if master_password.len() < MASTER_PASSWORD_MIN_LEN {
+    if master_password.chars().count() < MASTER_PASSWORD_MIN_LEN {
         bail!(PshError::MasterPasswordTooShort);
     }
     let mut argon2_params = ParamsBuilder::new();
@@ -399,7 +399,7 @@ pub enum PshError {
     #[error("Cannot remove alias `{0}` from db: alias does not exist")]
     DbAliasRemovalError(ZeroizingString),
 
-    #[error("Master password is too short (less than {} chars)", MASTER_PASSWORD_MIN_LEN)] //FIXME: not chars but bytes actually
+    #[error("Master password is too short (less than {} characters)", MASTER_PASSWORD_MIN_LEN)]
     MasterPasswordTooShort,
 
     #[error("Wrong master password")]
