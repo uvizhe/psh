@@ -479,23 +479,16 @@ dependencies = [
  "base64ct",
  "bitvec",
  "cbc",
- "home",
- "once_cell",
- "test-case",
- "thiserror",
- "zeroize",
-]
-
-[[package]]
-name = "psh-cli"
-version = "0.1.0"
-dependencies = [
  "clap",
  "clipboard",
  "console",
  "ctrlc",
  "dialoguer",
- "psh",
+ "home",
+ "once_cell",
+ "test-case",
+ "thiserror",
+ "zeroize",
 ]
 
 [[package]]
