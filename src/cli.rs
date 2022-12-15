@@ -1,5 +1,6 @@
 use std::fmt;
 use std::process;
+use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
 
@@ -181,24 +182,20 @@ pub fn before_cleanup_on_enter_or_timeout<F>(f: F)
         process::exit(0);
     }).expect("Error setting Ctrl-C handler");
 
-    // Safeguard which terminates program execution if no interaction occurs in two minutes
-    let timer = thread::spawn(|| {
-        thread::sleep(Duration::from_secs(SAFEGUARD_TIMEOUT));
-    });
+    let (sender, receiver) = channel();
 
-    let prompt = thread::spawn(|| {
+    thread::spawn(move || {
         let term = Term::stdout();
         term.write_line("Hit Enter to exit").unwrap();
         term.read_line().unwrap();
         term.clear_last_lines(1).unwrap();
+        sender.send("finished").unwrap();
     });
 
-    // Wait for user interaction or a safeguard activation
-    loop { // FIXME: this way of waiting consumes 100% of CPU time, use channels instead
-        if prompt.is_finished() || timer.is_finished() {
-            f();
-            cleanup();
-            return;
-        }
-    }
+    // Wait for user interaction or timeout
+    let time = Duration::from_secs(SAFEGUARD_TIMEOUT);
+    receiver.recv_timeout(time).ok();
+
+    f();
+    cleanup();
 }
