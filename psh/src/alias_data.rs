@@ -238,4 +238,41 @@ mod tests {
         let n = Nonce::new(nonce);
         *n.increment()
     }
+
+    #[test_case(0, false, CharSet::Standard => vec![0, 0, 0, 0]; "all bits are 0")]
+    #[test_case(16_777_215, false, CharSet::Standard => vec![0, 255, 255, 255]; "max nonce")]
+    #[test_case(16_777_216, false, CharSet::Standard => vec![0, 0, 0, 0]; "max nonce + 1")]
+    #[test_case(0, true, CharSet::Standard => vec![1, 0, 0, 0]; "use secret")]
+    #[test_case(0, false, CharSet::Reduced => vec![2, 0, 0, 0]; "reduced charset")]
+    #[test_case(0, false, CharSet::RequireAll => vec![4, 0, 0, 0]; "require_all charset")]
+    #[test_case(16_777_215, true, CharSet::RequireAll => vec![5, 255, 255, 255]; "all bits are 1")]
+    fn encode_nonce_and_flags(nonce: u32, use_secret: bool, charset: CharSet) -> Vec<u8> {
+        let alias = ZeroizingString::new("".to_string());
+        let alias_data = AliasData::new(&alias, Nonce::new(nonce), use_secret, charset);
+        alias_data.encode_nonce_and_flags()
+    }
+
+    #[test_case(&[0, 0, 0, 0] => 0; "zero nonce, zero flags")]
+    #[test_case(&[255, 0, 0, 0] => 0; "zero nonce, non-zero flags")]
+    #[test_case(&[255, 1, 0, 0] => 1; "non-zero nonce")]
+    #[test_case(&[255, 255, 255, 255] => 16_777_215; "max nonce")]
+    fn extract_nonce(bytes: &[u8]) -> u32 {
+        AliasData::extract_nonce(bytes)
+    }
+
+    #[test_case(&[0, 0, 0, 0] => false; "all zeroes")]
+    #[test_case(&[1, 0, 0, 0] => true; "flag is set")]
+    #[test_case(&[255, 0, 0, 0] => true; "all flags are non-zero")]
+    #[test_case(&[254, 255, 255, 255] => false; "all other bits are non-zero")]
+    fn extract_secret_flag(bytes: &[u8]) -> bool {
+        AliasData::extract_secret_flag(bytes)
+    }
+
+    #[test_case(&[0, 0, 0, 0] => CharSet::Standard; "all zeroes")]
+    #[test_case(&[249, 255, 255, 255] => CharSet::Standard; "all other bits are non-zero")]
+    #[test_case(&[2, 0, 0, 0] => CharSet::Reduced; "reduced charset")]
+    #[test_case(&[4, 0, 0, 0] => CharSet::RequireAll; "require_all charset")]
+    fn extract_charset(bytes: &[u8]) -> CharSet {
+        AliasData::extract_charset(bytes)
+    }
 }
