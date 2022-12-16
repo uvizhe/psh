@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, File, Permissions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -74,7 +74,7 @@ fn hash_master_password(master_password: ZeroizingString) -> Result<ZeroizingVec
 
 pub struct Psh {
     master_password: ZeroizingVec,
-    known_aliases: HashMap<ZeroizingString, AliasData>,
+    known_aliases: BTreeMap<ZeroizingString, AliasData>,
     last_nonce: Option<Nonce>,
     new_alias: Option<AliasData>,
 }
@@ -85,7 +85,7 @@ impl Psh {
 
         let mut psh = Self {
             master_password: hashed_mp,
-            known_aliases: HashMap::new(),
+            known_aliases: BTreeMap::new(),
             last_nonce: None,
             new_alias: None,
         };
@@ -346,7 +346,7 @@ impl CharSet {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, ZeroizeOnDrop)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ZeroizeOnDrop)]
 pub struct ZeroizingString {
     string: String,
 }
