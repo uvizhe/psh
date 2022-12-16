@@ -11,24 +11,32 @@ use crate::cli::*;
 
 mod cli;
 
-fn main() {
-    let cli = Cli::parse();
+fn psh() -> Psh {
     let term = Term::stdout();
 
     let master_password = prompt_master_password();
 
-    let mut psh = match Psh::new(master_password) {
+    let psh = match Psh::new(master_password) {
         Ok(psh) => psh,
         Err(error) => {
             term.write_line(&error.to_string()).unwrap();
             process::exit(1);
         }
     };
+    psh
+}
+
+fn main() {
+    let cli = Cli::parse();
+    let term = Term::stdout();
 
     if cli.list {
-        print_aliases(&psh);
-        before_cleanup_on_enter_or_timeout(|| {});
+        if Psh::has_db() {
+            print_aliases(&psh());
+            before_cleanup_on_enter_or_timeout(|| {});
+        }
     } else if cli.remove {
+        let psh = psh();
         let alias = cli.alias
             .expect("Alias is not given");
         match psh.remove_alias_from_db(&alias) {
@@ -39,6 +47,7 @@ fn main() {
             }
         }
     } else {
+        let mut psh = psh();
         let alias =
             if let Some(cli_alias) = cli.alias {
                 cli_alias

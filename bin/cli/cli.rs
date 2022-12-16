@@ -8,7 +8,7 @@ use clap::{AppSettings, ArgGroup, Parser};
 use console::Term;
 use dialoguer::{Confirm, Input, Select, Password, theme::Theme};
 
-use psh::{Psh, CharSet, ZeroizingString, db_file, ALIAS_MAX_LEN, MASTER_PASSWORD_MIN_LEN};
+use psh::{Psh, CharSet, ZeroizingString, ALIAS_MAX_LEN, MASTER_PASSWORD_MIN_LEN};
 
 const SAFEGUARD_TIMEOUT: u64 = 120;
 
@@ -71,7 +71,7 @@ impl Theme for PshTheme {
 pub fn prompt_master_password() -> ZeroizingString {
     let mut password_prompt = Password::new();
     let master_password_prompt =
-        if db_file().exists() {
+        if Psh::has_db() {
             password_prompt.with_prompt("Enter master password")
         } else {
             let term = Term::stdout();

@@ -34,7 +34,7 @@ const SYMBOLS: [char; 104] = [
     ';', '<', '=', '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~',
 ];
 
-pub fn db_file() -> PathBuf {
+fn db_file() -> PathBuf {
     let mut db_file = home::home_dir()
         .expect("User has no home directory");
     db_file.push(DB_FILE);
@@ -95,14 +95,24 @@ impl Psh {
         Ok(psh)
     }
 
+    pub fn has_db() -> bool {
+        let db = db_file();
+        if db.exists() {
+            let metadata = fs::metadata(db_file()).unwrap();
+            if metadata.len() > 0 {
+                return true;
+            }
+        }
+        false
+    }
+
     fn master_password(&self) -> &ZeroizingVec {
         &self.master_password
     }
 
     fn get_aliases(&mut self) -> Result<()> {
-        let db_file = db_file();
-        if db_file.exists() {
-            let db = File::open(db_file)?;
+        if Self::has_db() {
+            let db = File::open(db_file())?;
             let reader = BufReader::new(db);
             for line in reader.lines() {
                 let enc_alias = ZeroizingString::new(line?);
