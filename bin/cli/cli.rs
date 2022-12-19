@@ -164,7 +164,7 @@ pub fn print_aliases(psh: &Psh) {
         .iter()
         .map(|x| x.as_str())
         .collect();
-    term.write_line(&format!("Previously used aliases: {}", aliases.join(" "))).unwrap();
+    term.write_line(&format!("Previously used aliases: {}", aliases.join(", "))).unwrap();
 }
 
 pub fn before_cleanup_on_enter_or_timeout<F>(f: F)
