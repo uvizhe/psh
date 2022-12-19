@@ -12,7 +12,7 @@ use zeroize::Zeroizing;
 
 use super::{
     CharSet, PshError, ZeroizingString, ZeroizingVec,
-    ALIAS_MAX_LEN,
+    ALIAS_MAX_BYTES,
 };
 
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
@@ -63,9 +63,9 @@ impl AliasData {
     }
 
     // XXX: Is it safe to pad with predictable data?
-    fn padded_alias(&self) -> [u8; ALIAS_MAX_LEN] {
+    fn padded_alias(&self) -> [u8; ALIAS_MAX_BYTES] {
         let alias_len = self.alias.len();
-        let mut padded = [0u8; ALIAS_MAX_LEN];
+        let mut padded = [0u8; ALIAS_MAX_BYTES];
         padded[..alias_len].copy_from_slice(self.alias.as_bytes());
         padded
     }
@@ -132,7 +132,7 @@ impl AliasData {
 
         // In AES128 key size and IV size are the same, 16 bytes, half of default argon2 output len
         let (key, iv) = hasher_buf.split_at(16);
-        let mut encrypter_buf = Zeroizing::new([0u8; ALIAS_MAX_LEN * 2]);
+        let mut encrypter_buf = Zeroizing::new([0u8; ALIAS_MAX_BYTES * 2]);
         let encrypted = Aes128CbcEnc::new(key.into(), iv.into())
             .encrypt_padded_b2b_mut::<Pkcs7>(&alias, &mut *encrypter_buf)
             .unwrap();
@@ -141,14 +141,14 @@ impl AliasData {
         let alias_rec_bytes = Zeroizing::new(
             [&self.encode_nonce_and_flags(), encrypted].concat()
         );
-        let mut encoder_buf = Zeroizing::new([0u8; ALIAS_MAX_LEN * 2]);
+        let mut encoder_buf = Zeroizing::new([0u8; ALIAS_MAX_BYTES * 2]);
         let alias_rec = Base64::encode(&alias_rec_bytes, &mut *encoder_buf).unwrap();
         self.encrypted_alias.set(ZeroizingString::new(alias_rec.to_string())).unwrap();
     }
 
     fn decrypt_alias(encrypted_alias: &ZeroizingString, password: &ZeroizingVec) -> Result<Self> {
         // Decode base64 alias data representation
-        let mut decoder_buf = Zeroizing::new([0u8; ALIAS_MAX_LEN * 2]);
+        let mut decoder_buf = Zeroizing::new([0u8; ALIAS_MAX_BYTES * 2]);
         let enc_alias = Base64::decode(&encrypted_alias.as_bytes(), &mut *decoder_buf)
             .map_err(|err| PshError::DbAliasDecodeError(encrypted_alias.clone(), err))?;
 
@@ -170,7 +170,7 @@ impl AliasData {
             .expect("Error hashing with Argon2");
         // In AES128 key size and IV size are the same, 16 bytes, half of default argon2 output len
         let (key, iv) = hasher_buf.split_at(16);
-        let mut decrypter_buf = Zeroizing::new([0u8; ALIAS_MAX_LEN * 2]);
+        let mut decrypter_buf = Zeroizing::new([0u8; ALIAS_MAX_BYTES * 2]);
         let dec_result = Aes128CbcDec::new(key.into(), iv.into())
             .decrypt_padded_b2b_mut::<Pkcs7>(&enc_alias[4..], &mut *decrypter_buf);
         match dec_result {

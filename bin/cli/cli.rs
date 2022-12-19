@@ -8,7 +8,7 @@ use clap::{AppSettings, ArgGroup, Parser};
 use console::Term;
 use dialoguer::{Confirm, Input, Select, Password, theme::Theme};
 
-use psh::{Psh, CharSet, ZeroizingString, ALIAS_MAX_LEN, MASTER_PASSWORD_MIN_LEN};
+use psh::{Psh, CharSet, ZeroizingString, ALIAS_MAX_BYTES, MASTER_PASSWORD_MIN_LEN};
 
 const SAFEGUARD_TIMEOUT: u64 = 120;
 
@@ -48,8 +48,8 @@ fn trim_string(value: &str) -> Result<ZeroizingString, String> {
     let value = value.trim();
     if value.is_empty() {
         Err("Empty string".to_string())
-    } else if value.len() > ALIAS_MAX_LEN {
-        Err(format!("Alias too long. Must be {} bytes at most", ALIAS_MAX_LEN))
+    } else if value.len() > ALIAS_MAX_BYTES {
+        Err(format!("Alias too long. Must be {} bytes at most", ALIAS_MAX_BYTES))
     } else {
         Ok(ZeroizingString::new(value.to_string()))
     }
@@ -106,8 +106,8 @@ pub fn prompt_alias() -> ZeroizingString {
                 let input = input.trim();
                 if input.is_empty() {
                     Err("Alias cannot be empty".to_string())
-                } else if input.len() > ALIAS_MAX_LEN {
-                    Err(format!("Alias too long. Must be {} bytes at most", ALIAS_MAX_LEN))
+                } else if input.len() > ALIAS_MAX_BYTES {
+                    Err(format!("Alias too long. Must be {} bytes at most", ALIAS_MAX_BYTES))
                 } else {
                     Ok(())
                 }

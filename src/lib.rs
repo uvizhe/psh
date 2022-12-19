@@ -1,3 +1,60 @@
+//! # Psh (**p**assword ha**sh**er)
+//!
+//! *For preamble to design philosophy of this crate see GitHub
+//! [project page](https://github.com/uvizhe/psh).*
+//!
+//! `psh` is a password hasher and a password manager library which produces deterministic
+//! passwords for a set of user inputs.
+//!
+//! There is a binary target in this crate, a CLI utility that leverages `psh` functionality. It
+//! can be installed using the following `cargo` command:
+//! ```sh
+//! $ cargo install --features=cli psh
+//! ```
+//!
+//! Below is an example of how to use `psh` in your code:
+//! ```
+//! use psh::{Psh, ZeroizingString};
+//!
+//! let master_password = ZeroizingString::new(
+//!     "this_better_be_a_strong_password".to_string());
+//! let mut psh = Psh::new(master_password)
+//!     .expect("Error initializing Psh");
+//! let alias = ZeroizingString::new(
+//!     "my_secret_box".to_string());
+//! let password = psh.derive_password(&alias, None, None);
+//! ```
+//!
+//! For greater security it's possible to supply a secret:
+//! ```
+//! # use psh::{Psh, ZeroizingString};
+//! #
+//! # let master_password = ZeroizingString::new(
+//! #    "this_better_be_a_strong_password".to_string());
+//! # let mut psh = Psh::new(master_password)
+//! #    .expect("master password is too short");
+//! # let alias = ZeroizingString::new(
+//! #    "my_secret_box".to_string());
+//! let secret = ZeroizingString::new(
+//!     "an_easy_to_remember_secret_word".to_string());
+//! let password = psh.derive_password(&alias, Some(secret), None);
+//! ```
+//!
+//! The third argument to `derive_password()` is [`CharSet`]:
+//! ```
+//! # use psh::{Psh, ZeroizingString};
+//! use psh::CharSet;
+//!
+//! # let master_password = ZeroizingString::new(
+//! #    "this_better_be_a_strong_password".to_string());
+//! # let mut psh = Psh::new(master_password)
+//! #    .expect("master password is too short");
+//! # let alias = ZeroizingString::new(
+//! #    "my_secret_box".to_string());
+//! // This password should consist of [a-zA-Z0-9] characters only
+//! let password = psh.derive_password(&alias, None, Some(CharSet::Reduced));
+//! ```
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, File, Permissions};
@@ -15,8 +72,11 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 mod alias_data;
 use alias_data::{AliasData, Nonce};
 
-pub const ALIAS_MAX_LEN: usize = 79;
+/// Maximum length for alias in bytes
+pub const ALIAS_MAX_BYTES: usize = 79;
+/// Minimum length for master password in characters
 pub const MASTER_PASSWORD_MIN_LEN: usize = 8;
+
 const DB_FILE: &str = ".psh.db";
 const PASSWORD_LEN: usize = 16;
 const COLLECTED_BYTES_LEN: usize = 64;
@@ -72,6 +132,7 @@ fn hash_master_password(master_password: ZeroizingString) -> Result<ZeroizingVec
     Ok(ZeroizingVec::new(hashed_mp))
 }
 
+/// Password hasher interface
 pub struct Psh {
     master_password: ZeroizingVec,
     known_aliases: BTreeMap<ZeroizingString, AliasData>,
@@ -95,6 +156,80 @@ impl Psh {
         Ok(psh)
     }
 
+    /// Derives password.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `alias` is an empty string.\
+    /// Panics if `alias` is longer than ALIAS_MAX_BYTES.\
+    /// Panics if `alias` expects `secret` but None or empty string is given.
+    /// Panics if `alias` is known and wrong `charset` is given.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use psh::{Psh, ZeroizingString};
+    ///
+    /// let mut psh = Psh::new(
+    ///         ZeroizingString::new("password".to_string())
+    ///     ).expect("Error initializing Psh");
+    /// let alias = ZeroizingString::new("alias".to_string());
+    /// let secret = ZeroizingString::new("secret".to_string());
+    /// let password = psh.derive_password(&alias, Some(secret), None);
+    ///
+    /// assert_eq!(password.as_str(), "z}9]m>D@$Qd&}o0r");
+    /// ```
+    pub fn derive_password(
+        &mut self,
+        alias: &ZeroizingString,
+        secret: Option<ZeroizingString>,
+        charset: Option<CharSet>,
+    ) -> ZeroizingString {
+        if alias.is_empty() {
+            panic!("Alias cannot be empty");
+        }
+        if alias.len() > ALIAS_MAX_BYTES {
+            panic!("Alias is too long (more than {} bytes)", ALIAS_MAX_BYTES);
+        }
+
+        let charset = charset.unwrap_or(CharSet::Standard);
+        let use_secret: bool;
+        if self.alias_is_known(alias) {
+            let alias_data = self.known_aliases.get(alias).unwrap();
+            use_secret = alias_data.use_secret();
+            if charset != self.get_charset(alias) {
+                panic!("This alias uses different charset: {:?}", self.get_charset(alias));
+            }
+        } else {
+            self.last_nonce = self.last_nonce
+                .and_then(|n| Some(n.increment())) // increment nonce if it is initialized
+                .or(Some(Nonce::new(0)));          // or initialize it otherwise
+            use_secret = secret.is_some();
+            let mut alias_data = AliasData::new(
+                alias,
+                self.last_nonce.unwrap(),
+                use_secret,
+                charset);
+            alias_data.encrypt_alias(self.master_password());
+            self.new_alias = Some(alias_data);
+        }
+        if use_secret && (secret.is_none() || secret.as_ref().unwrap().is_empty()) {
+            panic!("Secret must not be empty for this alias");
+        }
+
+        let secret = secret.unwrap_or(ZeroizingString::new("".to_string()));
+        let mut local_nonce = 0;
+        let password = loop {
+            let bytes = self.generate_bytes(alias, &secret, local_nonce);
+            if let Ok(password_string) = Self::produce_password(charset, bytes) {
+                break password_string
+            }
+            local_nonce += 1;
+        };
+        password
+    }
+
+    /// Checks if `Psh` alias database is present (and has any records).
     pub fn has_db() -> bool {
         let db = db_file();
         if db.exists() {
@@ -127,15 +262,20 @@ impl Psh {
         Ok(())
     }
 
+    /// Returns a sorted list of previously used aliases (those recorded in `Psh` database).
     pub fn aliases(&self) -> Vec<&ZeroizingString> {
         self.known_aliases.keys().collect()
     }
 
+    /// Checks if alias has been previously used (exists in `Psh` database).
     pub fn alias_is_known(&self, alias: &ZeroizingString) -> bool {
         self.known_aliases.contains_key(alias)
     }
 
+    /// Checks if alias that has been previously used requires a secret.
+    ///
     /// # Panics
+    ///
     /// Panics if `alias` is not present in DB.
     pub fn alias_uses_secret(&self, alias: &ZeroizingString) -> bool {
         if let Some(alias_data) = self.known_aliases.get(alias) {
@@ -145,7 +285,10 @@ impl Psh {
         }
     }
 
+    /// Returns a charset for an alias that has been previously used.
+    ///
     /// # Panics
+    ///
     /// Panics if `alias` is not present in DB.
     pub fn get_charset(&self, alias: &ZeroizingString) -> CharSet {
         if let Some(alias_data) = self.known_aliases.get(alias) {
@@ -155,6 +298,9 @@ impl Psh {
         }
     }
 
+    /// Saves alias to `Psh` database. Alias has to be used with [`derive_password`] prior to this.
+    ///
+    /// [`derive_password`]: #method.derive_password
     pub fn append_alias_to_db(&mut self) -> Result<()> {
         if let Some(alias_data) = &self.new_alias {
             let mut key = alias_data.encrypted_alias()
@@ -173,6 +319,7 @@ impl Psh {
         Ok(())
     }
 
+    /// Removes alias from `Psh` database.
     pub fn remove_alias_from_db(&self, alias: &ZeroizingString) -> Result<()> {
         if self.alias_is_known(alias) {
             let alias_data = self.known_aliases.get(alias).unwrap();
@@ -194,60 +341,9 @@ impl Psh {
             }
             fs::rename(db_tmp_file(), db_file())?;
         } else {
-            bail!(PshError::DbAliasRemovalError(alias.clone()));
+            bail!(PshError::DbAliasRemoveError(alias.clone()));
         }
         Ok(())
-    }
-
-    /// # Panics
-    /// Panics if `alias` is an empty string.
-    /// Panics if `alias` is longer than ALIAS_MAX_LEN.
-    /// Panics if `alias` expects `secret` but None or empty string is given.
-    pub fn derive_password(
-        &mut self,
-        alias: &ZeroizingString,
-        secret: Option<ZeroizingString>,
-        charset: Option<CharSet>,
-    ) -> ZeroizingString {
-        if alias.is_empty() {
-            panic!("Alias cannot be empty");
-        }
-        if alias.len() > ALIAS_MAX_LEN {
-            panic!("Alias is too long (more than {} bytes)", ALIAS_MAX_LEN);
-        }
-
-        let charset = charset.unwrap_or(CharSet::Standard);
-        let use_secret: bool;
-        if self.alias_is_known(alias) {
-            let alias_data = self.known_aliases.get(alias).unwrap();
-            use_secret = alias_data.use_secret();
-        } else {
-            self.last_nonce = self.last_nonce
-                .and_then(|n| Some(n.increment())) // increment nonce if it is initialized
-                .or(Some(Nonce::new(0)));          // or initialize it otherwise
-            use_secret = secret.is_some();
-            let mut alias_data = AliasData::new(
-                alias,
-                self.last_nonce.unwrap(),
-                use_secret,
-                charset);
-            alias_data.encrypt_alias(self.master_password());
-            self.new_alias = Some(alias_data);
-        }
-        if use_secret && (secret.is_none() || secret.as_ref().unwrap().is_empty()) {
-            panic!("Secret must not be empty for this alias");
-        }
-
-        let secret = secret.unwrap_or(ZeroizingString::new("".to_string()));
-        let mut local_nonce = 0;
-        let password = loop {
-            let bytes = self.generate_bytes(alias, &secret, local_nonce);
-            if let Ok(password_string) = Self::produce_password(charset, bytes) {
-                break password_string
-            }
-            local_nonce += 1;
-        };
-        password
     }
 
     // Generates COLLECTED_BYTES_LEN bytes using argon2 hashing algorithm
@@ -330,10 +426,16 @@ impl Psh {
     }
 }
 
+/// Character set for a derived password
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum CharSet {
+    /// Standard charset consists of all printable ASCII characters (space excluded)
     Standard,
+    /// Reduced charset allows only ASCII alphanumeric (i.e., [a-zA-Z0-9])
     Reduced,
+    /// RequireAll is like Standard, but guarantees that derived password has at least one
+    /// symbol from all character types: numbers, lowercase letters, uppercase letters and
+    /// punctuation symbols
     RequireAll,
 }
 
@@ -347,6 +449,7 @@ impl CharSet {
     }
 }
 
+/// Safe `String` wrapper which employs `zeroize` crate to wipe memory of its content
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ZeroizeOnDrop)]
 pub struct ZeroizingString {
     string: String,
@@ -401,14 +504,14 @@ impl Deref for ZeroizingVec {
     }
 }
 
-// End-user facing errors
+/// Errors facing end-user
 #[derive(Error, Debug)]
 pub enum PshError {
     #[error("Unable to decode alias {0} as Base64: {1}")]
     DbAliasDecodeError(ZeroizingString, base64ct::Error),
 
     #[error("Cannot remove alias `{0}` from db: alias does not exist")]
-    DbAliasRemovalError(ZeroizingString),
+    DbAliasRemoveError(ZeroizingString),
 
     #[error("Master password is too short (less than {} characters)", MASTER_PASSWORD_MIN_LEN)]
     MasterPasswordTooShort,
