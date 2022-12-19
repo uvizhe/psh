@@ -207,7 +207,7 @@ impl Psh {
         &mut self,
         alias: &ZeroizingString,
         secret: Option<ZeroizingString>,
-        charset: CharSet,
+        charset: Option<CharSet>,
     ) -> ZeroizingString {
         if alias.is_empty() {
             panic!("Alias cannot be empty");
@@ -216,6 +216,7 @@ impl Psh {
             panic!("Alias is too long (more than {} bytes)", ALIAS_MAX_LEN);
         }
 
+        let charset = charset.unwrap_or(CharSet::Standard);
         let use_secret: bool;
         if self.alias_is_known(alias) {
             let alias_data = self.known_aliases.get(alias).unwrap();

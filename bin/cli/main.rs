@@ -55,12 +55,12 @@ fn main() {
                 prompt_alias()
             };
 
-        let charset =
+        let charset = Some(
             if psh.alias_is_known(&alias) {
                 psh.get_charset(&alias)
             } else {
                 prompt_charset()
-            };
+            });
 
         let use_secret =
             if psh.alias_is_known(&alias) {
