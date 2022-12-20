@@ -1,25 +1,25 @@
 [package]
 name = "psh"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Alexander Uvizhev"]
 
 [dependencies]
 aes = { version = "0.8.2", features = ["zeroize"] }
-anyhow = "1.0.64"
+anyhow = "1.0.68"
 argon2 = { version = "0.4.1", features = ["alloc", "zeroize"] }
-base64ct = "1.5.2"
+base64ct = "1.5.3"
 bitvec = "1.0.1"
 cbc = { version = "0.1.2", features = ["zeroize"] }
-home = "0.5.3"
-once_cell = "1.14.0"
-thiserror = "1.0.34"
+home = "0.5.4"
+once_cell = "1.16.0"
+thiserror = "1.0.38"
 zeroize = { version = "1.5.7", features = ["zeroize_derive"] }
 
 clap = { version = "3.2.20", features = ["derive"], optional = true }
 clipboard = { version = "0.5.0", optional = true }
-console = { version = "0.15.1", optional = true }
-ctrlc = { version = "3.2.3", optional = true }
+console = { version = "0.15.2", optional = true }
+ctrlc = { version = "3.2.4", optional = true }
 dialoguer = { version = "0.10.2", features = ["zeroize"], optional = true }
 
 [dev-dependencies]

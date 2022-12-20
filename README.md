@@ -2,7 +2,7 @@
 
 *Psh* is the fusion of two different approaches to password management aiming to be as secure as possible.
 
-One approach is a ubiquitous password manager software like KeePass which has disadvantages of (1) relying on a single master password to rule them all and (2) difficult-to-do-it-secure DB synchronization between devices.
+One approach is a ubiquitous password manager software like KeePass which has disadvantages of 1) relying on a single master password to rule them all and 2) difficult-to-do-it-secure DB synchronization between devices.
 
 Another approach is a deterministic password generation like [pwcalc](https://github.com/pmorjan/pwcalc-chrome) which, if not used with strong secret words, produces passwords that are easy to guess.
 
