@@ -4,7 +4,8 @@
 //! [project page](https://github.com/uvizhe/psh).*
 //!
 //! `psh` is a password hasher and a password manager library which produces deterministic
-//! passwords for a set of user inputs.
+//! passwords for a set of user inputs. It can store previously used aliases and their password
+//! derivation settings in encrypted form in its internal database at `$HOME/.psh.db`.
 //!
 //! There is a binary target in this crate, a CLI utility that leverages `psh` functionality. It
 //! can be installed using the following `cargo` command:
@@ -18,7 +19,7 @@
 //!
 //! let master_password = ZeroizingString::new(
 //!     "this_better_be_a_strong_password".to_string());
-//! let mut psh = Psh::new(master_password)
+//! let psh = Psh::new(master_password)
 //!     .expect("Error initializing Psh");
 //! let alias = ZeroizingString::new(
 //!     "my_secret_box".to_string());
@@ -31,7 +32,7 @@
 //! #
 //! # let master_password = ZeroizingString::new(
 //! #    "this_better_be_a_strong_password".to_string());
-//! # let mut psh = Psh::new(master_password)
+//! # let psh = Psh::new(master_password)
 //! #    .expect("master password is too short");
 //! # let alias = ZeroizingString::new(
 //! #    "my_secret_box".to_string());
@@ -44,15 +45,35 @@
 //! ```
 //! # use psh::{Psh, ZeroizingString};
 //! use psh::CharSet;
-//!
+//! #
 //! # let master_password = ZeroizingString::new(
 //! #    "this_better_be_a_strong_password".to_string());
-//! # let mut psh = Psh::new(master_password)
+//! # let psh = Psh::new(master_password)
 //! #    .expect("master password is too short");
 //! # let alias = ZeroizingString::new(
 //! #    "my_secret_box".to_string());
 //! // This password should consist of [a-zA-Z0-9] characters only
 //! let password = psh.derive_password(&alias, None, Some(CharSet::Reduced));
+//! ```
+//!
+//! To store/remove alias and its settings to/from `psh` database:
+//! ```
+//! # use psh::{CharSet, Psh, ZeroizingString};
+//! #
+//! # let master_password = ZeroizingString::new(
+//! #    "this_better_be_a_strong_password".to_string());
+//! let mut psh = Psh::new(master_password)
+//!    .expect("master password is too short");
+//! # let alias = ZeroizingString::new(
+//! #    "my_secret_box".to_string());
+//! let use_secret = true;
+//! let charset = CharSet::RequireAll;
+//! // Store alias
+//! psh.append_alias_to_db(&alias, Some(use_secret), Some(charset))
+//!     .expect("Error storing alias");
+//! // Remove alias
+//! psh.remove_alias_from_db(&alias)
+//!     .expect("Error removing alias");
 //! ```
 
 use std::collections::BTreeMap;
@@ -140,6 +161,8 @@ pub struct Psh {
 }
 
 impl Psh {
+    /// Initializes password hasher/manager fetching all known (previously used) aliases from
+    /// `psh` database.
     pub fn new(master_password: ZeroizingString) -> Result<Self> {
         let hashed_mp = hash_master_password(master_password)?;
 
@@ -156,11 +179,13 @@ impl Psh {
 
     /// Derives password.
     ///
+    /// If `charset` is `None` - uses `Standard` charset.
+    ///
     /// # Panics
     ///
     /// Panics if `alias` is an empty string.\
     /// Panics if `alias` is longer than ALIAS_MAX_BYTES.\
-    /// Panics if `alias` expects `secret` but None or empty string is given.
+    /// Panics if `alias` is known and expects `secret` but `None` or empty string is given.\
     /// Panics if `alias` is known and wrong `charset` is given.
     ///
     /// # Examples
@@ -168,7 +193,7 @@ impl Psh {
     /// ```
     /// use psh::{Psh, ZeroizingString};
     ///
-    /// let mut psh = Psh::new(
+    /// let psh = Psh::new(
     ///         ZeroizingString::new("password".to_string())
     ///     ).expect("Error initializing Psh");
     /// let alias = ZeroizingString::new("alias".to_string());
@@ -178,7 +203,7 @@ impl Psh {
     /// assert_eq!(password.as_str(), "z}9]m>D@$Qd&}o0r");
     /// ```
     pub fn derive_password(
-        &mut self,
+        &self,
         alias: &ZeroizingString,
         secret: Option<ZeroizingString>,
         charset: Option<CharSet>,
@@ -217,7 +242,7 @@ impl Psh {
         password
     }
 
-    /// Checks if `Psh` alias database is present (and has any records).
+    /// Checks if `psh` alias database is present (and has any records).
     pub fn has_db() -> bool {
         let db = db_file();
         if db.exists() {
@@ -250,12 +275,12 @@ impl Psh {
         Ok(())
     }
 
-    /// Returns a sorted list of previously used aliases (those recorded in `Psh` database).
+    /// Returns a sorted list of previously used aliases (those recorded in `psh` database).
     pub fn aliases(&self) -> Vec<&ZeroizingString> {
         self.known_aliases.keys().collect()
     }
 
-    /// Checks if alias has been previously used (exists in `Psh` database).
+    /// Checks if alias has been previously used (exists in `psh` database).
     pub fn alias_is_known(&self, alias: &ZeroizingString) -> bool {
         self.known_aliases.contains_key(alias)
     }
@@ -264,7 +289,7 @@ impl Psh {
     ///
     /// # Panics
     ///
-    /// Panics if `alias` is not present in DB.
+    /// Panics if `alias` is not present in `psh` database.
     pub fn alias_uses_secret(&self, alias: &ZeroizingString) -> bool {
         if let Some(alias_data) = self.known_aliases.get(alias) {
             alias_data.use_secret()
@@ -277,7 +302,7 @@ impl Psh {
     ///
     /// # Panics
     ///
-    /// Panics if `alias` is not present in DB.
+    /// Panics if `alias` is not present in `psh` database.
     pub fn get_charset(&self, alias: &ZeroizingString) -> CharSet {
         if let Some(alias_data) = self.known_aliases.get(alias) {
             alias_data.charset()
@@ -286,11 +311,10 @@ impl Psh {
         }
     }
 
-    /// Saves alias to `Psh` database.
+    /// Saves alias to `psh` database.
     ///
-    /// # Panics
-    ///
-    /// Panics if `alias` is already present in DB.
+    /// If `use_secret` is `None` - does not use secret.\
+    /// If `charset` is `None` - uses `Standard` charset.
     pub fn append_alias_to_db(
         &mut self,
         alias: &ZeroizingString,
@@ -298,7 +322,7 @@ impl Psh {
         charset: Option<CharSet>,
     ) -> Result<()> {
         if self.alias_is_known(alias) {
-            panic!("Alias is already in database");
+            bail!(PshError::DbAliasAppendError(alias.clone()));
         }
         let new_nonce = self.last_nonce
             .and_then(|n| Some(n.increment())) // increment nonce if it is initialized
@@ -327,7 +351,7 @@ impl Psh {
         Ok(())
     }
 
-    /// Removes alias from `Psh` database.
+    /// Removes alias from `psh` database.
     pub fn remove_alias_from_db(&self, alias: &ZeroizingString) -> Result<()> {
         if self.alias_is_known(alias) {
             let alias_data = self.known_aliases.get(alias).unwrap();
@@ -517,6 +541,9 @@ impl Deref for ZeroizingVec {
 pub enum PshError {
     #[error("Unable to decode alias {0} as Base64: {1}")]
     DbAliasDecodeError(ZeroizingString, base64ct::Error),
+
+    #[error("Cannot add alias `{0}` to db: alias already present")]
+    DbAliasAppendError(ZeroizingString),
 
     #[error("Cannot remove alias `{0}` from db: alias does not exist")]
     DbAliasRemoveError(ZeroizingString),
