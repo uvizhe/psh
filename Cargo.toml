@@ -1,7 +1,9 @@
 [package]
 name = "psh"
+license = "MIT"
 version = "0.2.0"
 edition = "2021"
+description = "Password hasher/manager that derives deterministic passwords from a set of inputs"
 authors = ["Alexander Uvizhev"]
 
 [dependencies]
