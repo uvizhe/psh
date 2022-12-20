@@ -6,9 +6,12 @@ use std::time::Duration;
 
 use clap::{AppSettings, ArgGroup, Parser};
 use console::Term;
-use dialoguer::{Confirm, Input, Select, Password, theme::Theme};
+use dialoguer::{
+    theme::Theme,
+    Confirm, Input, Select, Password,
+};
 
-use psh::{Psh, CharSet, ZeroizingString, ALIAS_MAX_BYTES, MASTER_PASSWORD_MIN_LEN};
+use psh::{CharSet, Psh, ZeroizingString, ALIAS_MAX_BYTES, MASTER_PASSWORD_MIN_LEN};
 
 const SAFEGUARD_TIMEOUT: u64 = 120;
 
@@ -113,7 +116,7 @@ pub fn prompt_alias() -> ZeroizingString {
                 }
             })
             .interact_text()
-            .unwrap()
+            .unwrap(),
     );
 
     ZeroizingString::new(
@@ -143,7 +146,9 @@ NOTE: Standard character set can include all printable ASCII characters while Re
 
 pub fn prompt_secret_use() -> bool {
     Confirm::new()
-        .with_prompt("Do you want to use a secret word for this alias for even higher level of Security?")
+        .with_prompt(
+            "Do you want to use a secret word for this alias for even higher level of Security?"
+        )
         .default(true)
         .interact()
         .unwrap()
@@ -164,11 +169,13 @@ pub fn print_aliases(psh: &Psh) {
         .iter()
         .map(|x| x.as_str())
         .collect();
-    term.write_line(&format!("Previously used aliases: {}", aliases.join(", "))).unwrap();
+    term.write_line(&format!("Previously used aliases: {}", aliases.join(", ")))
+        .unwrap();
 }
 
 pub fn before_cleanup_on_enter_or_timeout<F>(f: F)
-    where F: Fn()
+where
+    F: Fn(),
 {
     // Clear last lines (with password/aliases) before exiting
     let cleanup = || {
@@ -180,7 +187,8 @@ pub fn before_cleanup_on_enter_or_timeout<F>(f: F)
     ctrlc::set_handler(move || {
         cleanup();
         process::exit(0);
-    }).expect("Error setting Ctrl-C handler");
+    })
+    .expect("Error setting Ctrl-C handler");
 
     let (sender, receiver) = channel();
 

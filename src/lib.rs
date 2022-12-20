@@ -230,16 +230,15 @@ impl Psh {
             panic!("Secret must not be empty for this alias");
         }
 
-        let secret = secret.unwrap_or(ZeroizingString::new("".to_string()));
+        let secret = secret.unwrap_or_else(|| ZeroizingString::new("".to_string()));
         let mut local_nonce = 0;
-        let password = loop {
+        loop {
             let bytes = self.generate_bytes(alias, &secret, local_nonce);
             if let Ok(password_string) = Self::produce_password(charset, bytes) {
-                break password_string
+                break password_string;
             }
             local_nonce += 1;
-        };
-        password
+        }
     }
 
     /// Checks if `psh` alias database is present (and has any records).
@@ -268,7 +267,8 @@ impl Psh {
 
                 self.last_nonce = Some(alias_data.nonce());
 
-                self.known_aliases.insert(alias_data.alias().clone(), alias_data);
+                self.known_aliases
+                    .insert(alias_data.alias().clone(), alias_data);
             }
         }
 
@@ -325,13 +325,13 @@ impl Psh {
             bail!(PshError::DbAliasAppendError(alias.clone()));
         }
         let new_nonce = self.last_nonce
-            .and_then(|n| Some(n.increment())) // increment nonce if it is initialized
-            .or(Some(Nonce::new(0)));          // or initialize it otherwise
+            .map_or(Nonce::new(0), |n| n.increment()); // initialize or increment nonce
         let mut alias_data = AliasData::new(
             alias,
-            new_nonce.unwrap(),
+            new_nonce,
             use_secret.unwrap_or(false),
-            charset.unwrap_or(CharSet::Standard));
+            charset.unwrap_or(CharSet::Standard),
+        );
         alias_data.encrypt_alias(self.master_password());
 
         let mut key = alias_data.encrypted_alias()
@@ -342,10 +342,10 @@ impl Psh {
         let mut db = File::options().create(true).append(true).open(db_file())?;
         let user_only_perms = Permissions::from_mode(0o600);
         db.set_permissions(user_only_perms)?;
-        db.write_all(&key.as_bytes())?;
+        db.write_all(key.as_bytes())?;
         key.zeroize();
 
-        self.last_nonce = new_nonce;
+        self.last_nonce = Some(new_nonce);
         self.known_aliases.insert(alias_data.alias().clone(), alias_data);
 
         Ok(())
@@ -401,7 +401,8 @@ impl Psh {
                 secret.as_bytes(),
                 nonce.to_le_bytes().as_slice(),
                 self.master_password(),
-            ].concat()
+            ]
+            .concat()
         );
         argon2.hash_password_into(&input, &salt, &mut *buf)
             .expect("Error hashing with Argon2");
@@ -439,9 +440,10 @@ impl Psh {
                     CharSet::Reduced | CharSet::Standard => break,
                     CharSet::RequireAll => {
                         if password_chars.iter().any(|b| b.is_ascii_digit())
-                                && password_chars.iter().any(|b| b.is_ascii_lowercase())
-                                && password_chars.iter().any(|b| b.is_ascii_uppercase())
-                                && password_chars.iter().any(|b| b.is_ascii_punctuation()) {
+                            && password_chars.iter().any(|b| b.is_ascii_lowercase())
+                            && password_chars.iter().any(|b| b.is_ascii_uppercase())
+                            && password_chars.iter().any(|b| b.is_ascii_punctuation())
+                        {
                             break;
                         } else {
                             // Start over
@@ -459,6 +461,7 @@ impl Psh {
 }
 
 /// Character set for a derived password
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum CharSet {
     /// Standard charset consists of all printable ASCII characters (space excluded)
@@ -489,9 +492,7 @@ pub struct ZeroizingString {
 
 impl ZeroizingString {
     pub fn new(string: String) -> Self {
-        Self {
-            string,
-        }
+        Self { string }
     }
 }
 
@@ -522,9 +523,7 @@ pub(crate) struct ZeroizingVec {
 
 impl ZeroizingVec {
     fn new(vec: Vec<u8>) -> Self {
-        Self {
-            vec,
-        }
+        Self { vec }
     }
 }
 

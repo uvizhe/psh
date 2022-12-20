@@ -81,7 +81,7 @@ impl AliasData {
         }
         // CharSet uses LSB 1,2 (00 = Standard, 01 = Reduced, 10 = RequireAll)
         match self.charset {
-            CharSet::Standard => {},
+            CharSet::Standard => {}
             CharSet::Reduced => nonce_and_flags |= 1 << 1,
             CharSet::RequireAll => nonce_and_flags |= 1 << 2,
         }
@@ -94,8 +94,9 @@ impl AliasData {
         nonce >> Nonce::UNUSED_BITS
     }
 
+    #[allow(clippy::match_like_matches_macro)]
     fn extract_secret_flag(encrypted_alias: &[u8]) -> bool {
-        let bit_flags: u8 = encrypted_alias[0].try_into().unwrap();
+        let bit_flags = encrypted_alias[0];
         match bit_flags & 1 {
             0 => false, // zero bit isn't set => do not use secret
             _ => true,  // zero bit is set => use secret
@@ -103,7 +104,7 @@ impl AliasData {
     }
 
     fn extract_charset(encrypted_alias: &[u8]) -> CharSet {
-        let bit_flags: u8 = encrypted_alias[0].try_into().unwrap();
+        let bit_flags = encrypted_alias[0];
         let charset_bits = bit_flags & (3 << 1);
         match charset_bits >> 1 {
             0 => CharSet::Standard,   // 00 => Standard
@@ -125,7 +126,8 @@ impl AliasData {
             [
                 self.nonce().to_le_bytes().as_slice(),
                 password,
-            ].concat()
+            ]
+            .concat()
         );
         argon2.hash_password_into(&input, &salt, &mut *hasher_buf)
             .expect("Error hashing with Argon2");
@@ -139,11 +141,17 @@ impl AliasData {
 
         // Concatenate encrypted alias with service data and encode with base64
         let alias_rec_bytes = Zeroizing::new(
-            [&self.encode_nonce_and_flags(), encrypted].concat()
+            [
+                &self.encode_nonce_and_flags(),
+                encrypted,
+            ]
+            .concat()
         );
         let mut encoder_buf = Zeroizing::new([0u8; ALIAS_MAX_BYTES * 2]);
         let alias_rec = Base64::encode(&alias_rec_bytes, &mut *encoder_buf).unwrap();
-        self.encrypted_alias.set(ZeroizingString::new(alias_rec.to_string())).unwrap();
+        self.encrypted_alias
+            .set(ZeroizingString::new(alias_rec.to_string()))
+            .unwrap();
     }
 
     fn decrypt_alias(encrypted_alias: &ZeroizingString, password: &ZeroizingVec) -> Result<Self> {
@@ -152,9 +160,9 @@ impl AliasData {
         let enc_alias = Base64::decode(&encrypted_alias.as_bytes(), &mut *decoder_buf)
             .map_err(|err| PshError::DbAliasDecodeError(encrypted_alias.clone(), err))?;
 
-        let nonce = Self::extract_nonce(&enc_alias);
-        let use_secret = Self::extract_secret_flag(&enc_alias);
-        let charset = Self::extract_charset(&enc_alias);
+        let nonce = Self::extract_nonce(enc_alias);
+        let use_secret = Self::extract_secret_flag(enc_alias);
+        let charset = Self::extract_charset(enc_alias);
 
         // Decrypt alias
         let salt = [0u8; 16];
@@ -164,7 +172,8 @@ impl AliasData {
             [
                 nonce.to_le_bytes().as_slice(),
                 password,
-            ].concat()
+            ]
+            .concat()
         );
         argon2.hash_password_into(&input, &salt, &mut *hasher_buf)
             .expect("Error hashing with Argon2");
@@ -178,8 +187,8 @@ impl AliasData {
                 let alias_bytes = ZeroizingVec::new(
                     dec.iter()
                         .filter(|x| **x != 0x0) // Unpad ZeroPadding
-                        .map(|&x| x)
-                        .collect()
+                        .copied()
+                        .collect(),
                 );
                 let alias = ZeroizingString::new(
                     std::str::from_utf8(&alias_bytes)?

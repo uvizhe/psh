@@ -3,11 +3,11 @@ use std::thread;
 use std::time::Duration;
 
 use clap::Parser;
-use clipboard::{ClipboardProvider, ClipboardContext};
+use clipboard::{ClipboardContext, ClipboardProvider};
 use console::Term;
 
-use psh::Psh;
 use crate::cli::*;
+use psh::Psh;
 
 mod cli;
 
@@ -82,7 +82,8 @@ fn main() {
         if cli.paranoid {
             output_password.replace_range(3..13, "**********");
         }
-        term.write_line(&output_password).unwrap();
+        term.write_line(&output_password)
+            .unwrap();
 
         if !psh.alias_is_known(&alias) {
             psh.append_alias_to_db(&alias, Some(use_secret), charset).unwrap();
