@@ -137,7 +137,6 @@ pub struct Psh {
     master_password: ZeroizingVec,
     known_aliases: BTreeMap<ZeroizingString, AliasData>,
     last_nonce: Option<Nonce>,
-    new_alias: Option<AliasData>,
 }
 
 impl Psh {
@@ -148,7 +147,6 @@ impl Psh {
             master_password: hashed_mp,
             known_aliases: BTreeMap::new(),
             last_nonce: None,
-            new_alias: None,
         };
 
         psh.get_aliases()?;
@@ -201,17 +199,7 @@ impl Psh {
                 panic!("This alias uses different charset: {:?}", self.get_charset(alias));
             }
         } else {
-            self.last_nonce = self.last_nonce
-                .and_then(|n| Some(n.increment())) // increment nonce if it is initialized
-                .or(Some(Nonce::new(0)));          // or initialize it otherwise
             use_secret = secret.is_some();
-            let mut alias_data = AliasData::new(
-                alias,
-                self.last_nonce.unwrap(),
-                use_secret,
-                charset);
-            alias_data.encrypt_alias(self.master_password());
-            self.new_alias = Some(alias_data);
         }
         if use_secret && (secret.is_none() || secret.as_ref().unwrap().is_empty()) {
             panic!("Secret must not be empty for this alias");
@@ -298,24 +286,44 @@ impl Psh {
         }
     }
 
-    /// Saves alias to `Psh` database. Alias has to be used with [`derive_password`] prior to this.
+    /// Saves alias to `Psh` database.
     ///
-    /// [`derive_password`]: #method.derive_password
-    pub fn append_alias_to_db(&mut self) -> Result<()> {
-        if let Some(alias_data) = &self.new_alias {
-            let mut key = alias_data.encrypted_alias()
-                .expect("Alias was not encrypted")
-                .to_string();
-            key.push('\n');
-
-            let mut db = File::options().create(true).append(true).open(db_file())?;
-            let user_only_perms = Permissions::from_mode(0o600);
-            db.set_permissions(user_only_perms)?;
-            db.write_all(&key.as_bytes())?;
-            key.zeroize();
-        } else {
-            bail!("Cannot write uninitialized alias data to DB");
+    /// # Panics
+    ///
+    /// Panics if `alias` is already present in DB.
+    pub fn append_alias_to_db(
+        &mut self,
+        alias: &ZeroizingString,
+        use_secret: Option<bool>,
+        charset: Option<CharSet>,
+    ) -> Result<()> {
+        if self.alias_is_known(alias) {
+            panic!("Alias is already in database");
         }
+        let new_nonce = self.last_nonce
+            .and_then(|n| Some(n.increment())) // increment nonce if it is initialized
+            .or(Some(Nonce::new(0)));          // or initialize it otherwise
+        let mut alias_data = AliasData::new(
+            alias,
+            new_nonce.unwrap(),
+            use_secret.unwrap_or(false),
+            charset.unwrap_or(CharSet::Standard));
+        alias_data.encrypt_alias(self.master_password());
+
+        let mut key = alias_data.encrypted_alias()
+            .expect("Alias was not encrypted")
+            .to_string();
+        key.push('\n');
+
+        let mut db = File::options().create(true).append(true).open(db_file())?;
+        let user_only_perms = Permissions::from_mode(0o600);
+        db.set_permissions(user_only_perms)?;
+        db.write_all(&key.as_bytes())?;
+        key.zeroize();
+
+        self.last_nonce = new_nonce;
+        self.known_aliases.insert(alias_data.alias().clone(), alias_data);
+
         Ok(())
     }
 

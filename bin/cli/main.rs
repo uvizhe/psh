@@ -85,7 +85,7 @@ fn main() {
         term.write_line(&output_password).unwrap();
 
         if !psh.alias_is_known(&alias) {
-            psh.append_alias_to_db().unwrap();
+            psh.append_alias_to_db(&alias, Some(use_secret), charset).unwrap();
         }
 
         before_cleanup_on_enter_or_timeout(|| {
