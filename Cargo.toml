@@ -9,6 +9,7 @@ description = "Password generator/manager that derives deterministic passwords f
 repository = "https://github.com/uvizhe/psh"
 keywords = ["password", "password-generator", "password-manager", "security", "cli"]
 exclude = ["*.gif", "*.png"]
+readme = "README_crate.md"
 
 [dependencies]
 aes = { version = "0.8.2", features = ["zeroize"] }
