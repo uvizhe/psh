@@ -1,4 +1,4 @@
-# Psh
+# Overview
 
 *For preamble to design philosophy of this crate see GitHub
 [project page](https://github.com/uvizhe/psh).*
