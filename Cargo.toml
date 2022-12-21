@@ -3,8 +3,12 @@ name = "psh"
 license = "MIT"
 version = "0.2.0"
 edition = "2021"
-description = "Password hasher/manager that derives deterministic passwords from a set of inputs"
 authors = ["Alexander Uvizhev"]
+
+description = "Password generator/manager that derives deterministic passwords from a set of inputs"
+repository = "https://github.com/uvizhe/psh"
+keywords = ["password", "password-generator", "password-manager", "security", "cli"]
+exclude = ["*.gif", "*.png"]
 
 [dependencies]
 aes = { version = "0.8.2", features = ["zeroize"] }
