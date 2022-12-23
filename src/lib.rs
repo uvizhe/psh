@@ -139,7 +139,7 @@ impl Psh {
             panic!("Alias is too long (more than {} bytes)", ALIAS_MAX_BYTES);
         }
 
-        let charset = charset.unwrap_or(CharSet::Standard);
+        let charset = charset.unwrap_or_default();
         let use_secret: bool;
         if self.alias_is_known(alias) {
             let alias_data = self.known_aliases.get(alias).unwrap();
@@ -253,7 +253,7 @@ impl Psh {
         let mut alias_data = AliasData::new(
             alias,
             use_secret.unwrap_or(false),
-            charset.unwrap_or(CharSet::Standard),
+            charset.unwrap_or_default(),
         );
         alias_data.encrypt_alias(self.hashed_mp());
 
@@ -385,15 +385,17 @@ impl Psh {
 
 /// Character set for a derived password
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub enum CharSet {
-    /// Standard charset consists of all printable ASCII characters (space excluded)
+    /// Standard charset consists of all printable ASCII characters (space excluded). It is a
+    /// default charset.
+    #[default]
     Standard,
-    /// Reduced charset allows only ASCII alphanumeric (i.e., [a-zA-Z0-9])
+    /// Reduced charset allows only ASCII alphanumeric (i.e., [a-zA-Z0-9]).
     Reduced,
     /// RequireAll is like Standard, but guarantees that derived password has at least one
     /// symbol from all character types: numbers, lowercase letters, uppercase letters and
-    /// punctuation symbols
+    /// punctuation symbols.
     RequireAll,
 }
 
