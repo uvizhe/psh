@@ -462,16 +462,16 @@ impl Deref for ZeroizingVec {
 /// Errors facing end-user
 #[derive(Error, Debug)]
 pub enum PshError {
-    #[error("Unable to decrypt alias {0}: Unauthentic cyphertext")]
+    #[error("Unable to decrypt DB record {0}: Unauthentic cyphertext")]
     DbAliasDecryptError(ZeroizingString),
 
-    #[error("Unable to decode alias {0} as Base64: {1}")]
+    #[error("Unable to decode DB record {0} as Base64: {1}")]
     DbAliasDecodeError(ZeroizingString, base64ct::Error),
 
-    #[error("Cannot add alias `{0}` to db: alias already present")]
+    #[error("Cannot add alias `{0}` to DB: alias already present")]
     DbAliasAppendError(ZeroizingString),
 
-    #[error("Cannot remove alias `{0}` from db: alias does not exist")]
+    #[error("Cannot remove alias `{0}` from DB: alias does not exist")]
     DbAliasRemoveError(ZeroizingString),
 
     #[error("Master password is too short (less than {} characters)", MASTER_PASSWORD_MIN_LEN)]
