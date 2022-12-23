@@ -30,8 +30,8 @@ impl AliasData {
         }
     }
 
-    pub fn new_known(encrypted_alias: &ZeroizingString, password: &ZeroizingVec) -> Result<Self> {
-        Self::decrypt_alias(encrypted_alias, password)
+    pub fn new_known(encrypted_alias: &ZeroizingString, key: &ZeroizingVec) -> Result<Self> {
+        Self::decrypt_alias(encrypted_alias, key)
     }
 
     pub fn alias(&self) -> &ZeroizingString {
@@ -93,12 +93,12 @@ impl AliasData {
         }
     }
 
-    pub fn encrypt_alias(&mut self, password: &ZeroizingVec) {
+    pub fn encrypt_alias(&mut self, key: &ZeroizingVec) {
         // Make all aliases the same length by padding them
         let alias = self.padded_alias();
 
-        // Encrypt alias using hashed password as ChaCha20Poly1305 key
-        let cipher = ChaCha20Poly1305::new_from_slice(&*password)
+        // Encrypt alias with ChaCha20Poly1305
+        let cipher = ChaCha20Poly1305::new_from_slice(&*key)
             .expect("Invalid key length");
         let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng); // 96-bits; unique per message
         let mut encrypter_buf = HVec::<u8, 95>::new(); // ALIAS_MAX_BYTES + 16 auth tag
@@ -128,7 +128,7 @@ impl AliasData {
         }
     }
 
-    fn decrypt_alias(encrypted_alias: &ZeroizingString, password: &ZeroizingVec) -> Result<Self> {
+    fn decrypt_alias(encrypted_alias: &ZeroizingString, key: &ZeroizingVec) -> Result<Self> {
         // Decode Base64 alias data representation
         let mut decoder_buf = Zeroizing::new([0u8; 144]);
         let enc_alias = Base64::decode(&encrypted_alias.as_bytes(), &mut *decoder_buf)
@@ -137,8 +137,8 @@ impl AliasData {
         let use_secret = Self::extract_secret_flag(enc_alias[0]);
         let charset = Self::extract_charset(enc_alias[0]);
 
-        // Decrypt alias using hashed password as ChaCha20Poly1305 key
-        let cipher = ChaCha20Poly1305::new_from_slice(&*password)
+        // Decrypt alias with ChaCha20Poly1305
+        let cipher = ChaCha20Poly1305::new_from_slice(&*key)
             .expect("Invalid key length");
         let nonce = Nonce::from_slice(&enc_alias[1..13]);
         let mut decrypter_buf = HVec::<u8, 128>::new();

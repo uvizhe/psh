@@ -54,7 +54,7 @@ fn db_tmp_file() -> PathBuf {
     db_tmp_file.into()
 }
 
-fn hash_master_password(master_password: ZeroizingString) -> Result<ZeroizingVec> {
+fn hash_master_password(master_password: &ZeroizingString) -> Result<ZeroizingVec> {
     if master_password.chars().count() < MASTER_PASSWORD_MIN_LEN {
         bail!(PshError::MasterPasswordTooShort);
     }
@@ -79,7 +79,8 @@ fn hash_master_password(master_password: ZeroizingString) -> Result<ZeroizingVec
 
 /// `psh` interface
 pub struct Psh {
-    master_password: ZeroizingVec,
+    master_password: ZeroizingString,
+    hashed_mp: ZeroizingVec,
     known_aliases: BTreeMap<ZeroizingString, AliasData>,
 }
 
@@ -87,10 +88,11 @@ impl Psh {
     /// Initializes password generator/manager fetching all known (previously used) aliases from
     /// `psh` database.
     pub fn new(master_password: ZeroizingString) -> Result<Self> {
-        let hashed_mp = hash_master_password(master_password)?;
+        let hashed_mp = hash_master_password(&master_password)?;
 
         let mut psh = Self {
-            master_password: hashed_mp,
+            master_password,
+            hashed_mp,
             known_aliases: BTreeMap::new(),
         };
 
@@ -122,7 +124,7 @@ impl Psh {
     /// let secret = ZeroizingString::new("secret".to_string());
     /// let password = psh.derive_password(&alias, Some(secret), None);
     ///
-    /// assert_eq!(password.as_str(), "z}9]m>D@$Qd&}o0r");
+    /// assert_eq!(password.as_str(), "aneS(kwe1/|'CW#,");
     /// ```
     pub fn derive_password(
         &self,
@@ -175,8 +177,12 @@ impl Psh {
         false
     }
 
-    fn master_password(&self) -> &ZeroizingVec {
+    fn master_password(&self) -> &ZeroizingString {
         &self.master_password
+    }
+
+    fn hashed_mp(&self) -> &ZeroizingVec {
+        &self.hashed_mp
     }
 
     fn get_aliases(&mut self) -> Result<()> {
@@ -185,7 +191,7 @@ impl Psh {
             let reader = BufReader::new(db);
             for line in reader.lines() {
                 let enc_alias = ZeroizingString::new(line?);
-                let alias_data = AliasData::new_known(&enc_alias, self.master_password())?;
+                let alias_data = AliasData::new_known(&enc_alias, self.hashed_mp())?;
 
                 self.known_aliases
                     .insert(alias_data.alias().clone(), alias_data);
@@ -249,7 +255,7 @@ impl Psh {
             use_secret.unwrap_or(false),
             charset.unwrap_or(CharSet::Standard),
         );
-        alias_data.encrypt_alias(self.master_password());
+        alias_data.encrypt_alias(self.hashed_mp());
 
         let mut key = alias_data.encrypted_alias()
             .expect("Alias was not encrypted")
@@ -316,7 +322,8 @@ impl Psh {
                 alias.as_bytes(),
                 secret.as_bytes(),
                 nonce.to_le_bytes().as_slice(),
-                self.master_password(),
+                self.master_password().as_bytes(),
+                self.hashed_mp(),
             ]
             .concat()
         );
