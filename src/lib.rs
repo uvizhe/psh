@@ -462,6 +462,9 @@ impl Deref for ZeroizingVec {
 /// Errors facing end-user
 #[derive(Error, Debug)]
 pub enum PshError {
+    #[error("Unable to decrypt alias {0}: Unauthentic cyphertext")]
+    DbAliasDecryptError(ZeroizingString),
+
     #[error("Unable to decode alias {0} as Base64: {1}")]
     DbAliasDecodeError(ZeroizingString, base64ct::Error),
 

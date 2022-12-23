@@ -1,22 +1,19 @@
 use std::ops::Deref;
 
-use aes::cipher::{
-    block_padding::Pkcs7,
-    BlockDecryptMut, BlockEncryptMut, KeyIvInit,
+use chacha20poly1305::{
+    aead::{AeadCore, AeadInPlace, KeyInit, OsRng, heapless::Vec as HVec},
+    ChaCha20Poly1305, Nonce as AENonce,
 };
 use anyhow::{bail, Result};
 use argon2::{Argon2, Params};
 use base64ct::{Base64, Encoding};
 use once_cell::unsync::OnceCell;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::{
     CharSet, PshError, ZeroizingString, ZeroizingVec,
     ALIAS_MAX_BYTES,
 };
-
-type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
-type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 
 #[derive(Debug)]
 pub(crate) struct AliasData {
@@ -118,7 +115,7 @@ impl AliasData {
         // Make all aliases the same length by padding them
         let alias = self.padded_alias();
 
-        // From hashed password and nonce derive DEFAULT_OUTPUT_LEN bytes for AES encryption
+        // From hashed password and nonce derive DEFAULT_OUTPUT_LEN bytes for ChaCha20Poly1305 key
         let salt = [0u8; 16];
         let mut hasher_buf = Zeroizing::new([0u8; Params::DEFAULT_OUTPUT_LEN]);
         let argon2 = Argon2::default();
@@ -132,21 +129,27 @@ impl AliasData {
         argon2.hash_password_into(&input, &salt, &mut *hasher_buf)
             .expect("Error hashing with Argon2");
 
-        // In AES128 key size and IV size are the same, 16 bytes, half of default argon2 output len
-        let (key, iv) = hasher_buf.split_at(16);
-        let mut encrypter_buf = Zeroizing::new([0u8; ALIAS_MAX_BYTES * 2]);
-        let encrypted = Aes128CbcEnc::new(key.into(), iv.into())
-            .encrypt_padded_b2b_mut::<Pkcs7>(&alias, &mut *encrypter_buf)
-            .unwrap();
+        // Encrypt alias
+        let cipher = ChaCha20Poly1305::new_from_slice(&*hasher_buf)
+            .expect("Invalid key length");
+        let ae_nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng); // 96-bits; unique per message
+        let mut encrypter_buf = HVec::<u8, 128>::new();
+        encrypter_buf.extend_from_slice(&alias)
+            .expect("The slice is too big");
+        cipher.encrypt_in_place(&ae_nonce, b"", &mut encrypter_buf)
+            .expect("Buffer is too small to hold resulting cyphertext");
 
         // Concatenate encrypted alias with service data and encode with base64
         let alias_rec_bytes = Zeroizing::new(
             [
                 &self.encode_nonce_and_flags(),
-                encrypted,
+                ae_nonce.as_slice(),
+                &encrypter_buf,
             ]
             .concat()
         );
+        encrypter_buf.zeroize();
+
         let mut encoder_buf = Zeroizing::new([0u8; ALIAS_MAX_BYTES * 2]);
         let alias_rec = Base64::encode(&alias_rec_bytes, &mut *encoder_buf).unwrap();
         self.encrypted_alias
@@ -164,7 +167,7 @@ impl AliasData {
         let use_secret = Self::extract_secret_flag(enc_alias);
         let charset = Self::extract_charset(enc_alias);
 
-        // Decrypt alias
+        // From hashed password and nonce derive DEFAULT_OUTPUT_LEN bytes for ChaCha20Poly1305 key
         let salt = [0u8; 16];
         let mut hasher_buf = Zeroizing::new([0u8; Params::DEFAULT_OUTPUT_LEN]);
         let argon2 = Argon2::default();
@@ -177,19 +180,23 @@ impl AliasData {
         );
         argon2.hash_password_into(&input, &salt, &mut *hasher_buf)
             .expect("Error hashing with Argon2");
-        // In AES128 key size and IV size are the same, 16 bytes, half of default argon2 output len
-        let (key, iv) = hasher_buf.split_at(16);
-        let mut decrypter_buf = Zeroizing::new([0u8; ALIAS_MAX_BYTES * 2]);
-        let dec_result = Aes128CbcDec::new(key.into(), iv.into())
-            .decrypt_padded_b2b_mut::<Pkcs7>(&enc_alias[4..], &mut *decrypter_buf);
-        match dec_result {
-            Ok(dec) => {
+
+        // Decrypt alias
+        let cipher = ChaCha20Poly1305::new_from_slice(&*hasher_buf)
+            .expect("Invalid key length");
+        let ae_nonce = AENonce::from_slice(&enc_alias[4..16]);
+        let mut decrypter_buf = HVec::<u8, 128>::new();
+        decrypter_buf.extend_from_slice(&enc_alias[16..])
+            .expect("The slice is too big");
+        match cipher.decrypt_in_place(&ae_nonce, b"", &mut decrypter_buf) {
+            Ok(_) => {
                 let alias_bytes = ZeroizingVec::new(
-                    dec.iter()
+                    decrypter_buf.iter()
                         .filter(|x| **x != 0x0) // Unpad ZeroPadding
                         .copied()
                         .collect(),
                 );
+                decrypter_buf.zeroize();
                 let alias = ZeroizingString::new(
                     std::str::from_utf8(&alias_bytes)?
                         .to_string()
@@ -202,7 +209,7 @@ impl AliasData {
                     charset,
                 })
             }
-            Err(_) => bail!(PshError::MasterPasswordWrong),
+            Err(_) => bail!(PshError::DbAliasDecryptError(encrypted_alias.clone()))
         }
     }
 }

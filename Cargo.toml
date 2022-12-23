@@ -12,12 +12,11 @@ exclude = ["*.gif", "*.png"]
 readme = "README_crate.md"
 
 [dependencies]
-aes = { version = "0.8.2", features = ["zeroize"] }
 anyhow = "1.0.68"
 argon2 = { version = "0.4.1", features = ["alloc", "zeroize"] }
 base64ct = "1.5.3"
 bitvec = "1.0.1"
-cbc = { version = "0.1.2", features = ["zeroize"] }
+chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["getrandom", "heapless"] }
 home = "0.5.4"
 once_cell = "1.16.0"
 thiserror = "1.0.38"
