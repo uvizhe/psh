@@ -164,7 +164,7 @@ impl AliasData {
                     charset,
                 })
             }
-            Err(_) => bail!(PshError::DbAliasDecryptError(encrypted_alias.clone()))
+            Err(_) => bail!(PshError::MasterPasswordWrong)
         }
     }
 }
