@@ -28,11 +28,6 @@ character set each time a password is being generated, and they are encrypted.
 
 ![](/psh.png "")
 
-### Design rationale behind hashing master password separately
-
-Is to make attacks on *psh* database harder: guessing a master password requires not only AES-CBC
-decryption work but also spending resources to hash candidate MP beforehand.
-
 ## TODO
 
 * (lib) Make internal database optional, instead allow using any DB
