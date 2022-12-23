@@ -15,7 +15,7 @@ use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 mod alias_data;
-use alias_data::{AliasData, Nonce};
+use alias_data::AliasData;
 
 /// Maximum length for alias in bytes
 pub const ALIAS_MAX_BYTES: usize = 79;
@@ -81,7 +81,6 @@ fn hash_master_password(master_password: ZeroizingString) -> Result<ZeroizingVec
 pub struct Psh {
     master_password: ZeroizingVec,
     known_aliases: BTreeMap<ZeroizingString, AliasData>,
-    last_nonce: Option<Nonce>,
 }
 
 impl Psh {
@@ -93,7 +92,6 @@ impl Psh {
         let mut psh = Self {
             master_password: hashed_mp,
             known_aliases: BTreeMap::new(),
-            last_nonce: None,
         };
 
         psh.get_aliases()?;
@@ -189,8 +187,6 @@ impl Psh {
                 let enc_alias = ZeroizingString::new(line?);
                 let alias_data = AliasData::new_known(&enc_alias, self.master_password())?;
 
-                self.last_nonce = Some(alias_data.nonce());
-
                 self.known_aliases
                     .insert(alias_data.alias().clone(), alias_data);
             }
@@ -248,11 +244,8 @@ impl Psh {
         if self.alias_is_known(alias) {
             bail!(PshError::DbAliasAppendError(alias.clone()));
         }
-        let new_nonce = self.last_nonce
-            .map_or(Nonce::new(0), |n| n.increment()); // initialize or increment nonce
         let mut alias_data = AliasData::new(
             alias,
-            new_nonce,
             use_secret.unwrap_or(false),
             charset.unwrap_or(CharSet::Standard),
         );
@@ -269,7 +262,6 @@ impl Psh {
         db.write_all(key.as_bytes())?;
         key.zeroize();
 
-        self.last_nonce = Some(new_nonce);
         self.known_aliases.insert(alias_data.alias().clone(), alias_data);
 
         Ok(())
