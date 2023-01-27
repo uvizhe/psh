@@ -2,27 +2,25 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::fs::{self, File, Permissions};
-use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::ops::{Deref, DerefMut};
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 use argon2::{Algorithm, Argon2, Params, ParamsBuilder, Version};
 use bitvec::prelude::*;
 use thiserror::Error;
-use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 mod alias_data;
 use alias_data::AliasData;
+
+mod db;
+pub use db::{PshDb, PshStore};
 
 /// Maximum length for alias in bytes
 pub const ALIAS_MAX_BYTES: usize = 79;
 /// Minimum length for master password in characters
 pub const MASTER_PASSWORD_MIN_LEN: usize = 8;
 
-const DB_FILE: &str = ".psh.db";
 const PASSWORD_LEN: usize = 16;
 const COLLECTED_BYTES_LEN: usize = 64;
 const MASTER_PASSWORD_MEM_COST: u32 = 64 * 1024;
@@ -38,21 +36,6 @@ const SYMBOLS: [char; 104] = [
     '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/', ':',
     ';', '<', '=', '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~',
 ];
-
-fn db_file() -> PathBuf {
-    let mut db_file = home::home_dir()
-        .expect("User has no home directory");
-    db_file.push(DB_FILE);
-
-    db_file
-}
-
-fn db_tmp_file() -> PathBuf {
-    let db_file = db_file();
-    let mut db_tmp_file = db_file.into_os_string();
-    db_tmp_file.push(".tmp");
-    db_tmp_file.into()
-}
 
 fn hash_master_password(master_password: &ZeroizingString) -> Result<ZeroizingVec> {
     if master_password.chars().count() < MASTER_PASSWORD_MIN_LEN {
@@ -82,18 +65,20 @@ pub struct Psh {
     master_password: ZeroizingString,
     hashed_mp: ZeroizingVec,
     known_aliases: BTreeMap<ZeroizingString, AliasData>,
+    db: Box<dyn PshStore + 'static>,
 }
 
 impl Psh {
     /// Initializes password generator/manager fetching all known (previously used) aliases from
     /// `psh` database.
-    pub fn new(master_password: ZeroizingString) -> Result<Self> {
+    pub fn new(master_password: ZeroizingString, db: impl PshStore + 'static) -> Result<Self> {
         let hashed_mp = hash_master_password(&master_password)?;
 
         let mut psh = Self {
             master_password,
             hashed_mp,
             known_aliases: BTreeMap::new(),
+            db: Box::new(db),
         };
 
         psh.get_aliases()?;
@@ -165,18 +150,6 @@ impl Psh {
         }
     }
 
-    /// Checks if `psh` alias database is present (and has any records).
-    pub fn has_db() -> bool {
-        let db = db_file();
-        if db.exists() {
-            let metadata = fs::metadata(db_file()).unwrap();
-            if metadata.len() > 0 {
-                return true;
-            }
-        }
-        false
-    }
-
     fn master_password(&self) -> &ZeroizingString {
         &self.master_password
     }
@@ -186,12 +159,9 @@ impl Psh {
     }
 
     fn get_aliases(&mut self) -> Result<()> {
-        if Self::has_db() {
-            let db = File::open(db_file())?;
-            let reader = BufReader::new(db);
-            for line in reader.lines() {
-                let enc_alias = ZeroizingString::new(line?);
-                let alias_data = AliasData::new_known(&enc_alias, self.hashed_mp())?;
+        if self.db.exists() {
+            for record in self.db.records() {
+                let alias_data = AliasData::new_known(&record, self.hashed_mp())?;
 
                 self.known_aliases
                     .insert(alias_data.alias().clone(), alias_data);
@@ -257,16 +227,8 @@ impl Psh {
         );
         alias_data.encrypt_alias(self.hashed_mp());
 
-        let mut key = alias_data.encrypted_alias()
-            .expect("Alias was not encrypted")
-            .to_string();
-        key.push('\n');
-
-        let mut db = File::options().create(true).append(true).open(db_file())?;
-        let user_only_perms = Permissions::from_mode(0o600);
-        db.set_permissions(user_only_perms)?;
-        db.write_all(key.as_bytes())?;
-        key.zeroize();
+        let encrypted_alias = alias_data.encrypted_alias().expect("Alias was not encrypted");
+        self.db.append(&encrypted_alias)?;
 
         self.known_aliases.insert(alias_data.alias().clone(), alias_data);
 
@@ -274,26 +236,12 @@ impl Psh {
     }
 
     /// Removes alias from `psh` database.
-    pub fn remove_alias_from_db(&self, alias: &ZeroizingString) -> Result<()> {
+    pub fn remove_alias_from_db(&mut self, alias: &ZeroizingString) -> Result<()> {
         if self.alias_is_known(alias) {
             let alias_data = self.known_aliases.get(alias).unwrap();
-            let encrypted_alias = alias_data.encrypted_alias().unwrap();
+            let encrypted_alias = alias_data.encrypted_alias().unwrap().clone();
 
-            let db = File::open(db_file())?;
-            let db_temp = File::create(db_tmp_file())?;
-            let user_only_perms = Permissions::from_mode(0o600);
-            db_temp.set_permissions(user_only_perms)?;
-
-            let reader = BufReader::new(&db);
-            let mut writer = BufWriter::new(&db_temp);
-
-            for line in reader.lines() {
-                let enc_alias = ZeroizingString::new(line?);
-                if &enc_alias != encrypted_alias {
-                    writeln!(writer, "{}", enc_alias)?;
-                }
-            }
-            fs::rename(db_tmp_file(), db_file())?;
+            self.db.delete(&encrypted_alias)?
         } else {
             bail!(PshError::DbAliasRemoveError(alias.clone()));
         }

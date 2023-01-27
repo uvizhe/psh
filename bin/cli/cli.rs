@@ -11,7 +11,10 @@ use dialoguer::{
     Confirm, Input, Select, Password,
 };
 
-use psh::{CharSet, Psh, ZeroizingString, ALIAS_MAX_BYTES, MASTER_PASSWORD_MIN_LEN};
+use psh::{
+    CharSet, Psh, PshDb, PshStore, ZeroizingString,
+    ALIAS_MAX_BYTES, MASTER_PASSWORD_MIN_LEN
+};
 
 const SAFEGUARD_TIMEOUT: u64 = 120;
 
@@ -71,10 +74,10 @@ impl Theme for PshTheme {
     }
 }
 
-pub fn prompt_master_password() -> ZeroizingString {
+pub fn prompt_master_password(db: &PshDb) -> ZeroizingString {
     let mut password_prompt = Password::new();
     let master_password_prompt =
-        if Psh::has_db() {
+        if db.exists() {
             password_prompt.with_prompt("Enter master password")
         } else {
             let term = Term::stdout();

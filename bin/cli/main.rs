@@ -7,16 +7,16 @@ use clipboard::{ClipboardContext, ClipboardProvider};
 use console::Term;
 
 use crate::cli::*;
-use psh::Psh;
+use psh::{Psh, PshDb, PshStore};
 
 mod cli;
 
-fn psh() -> Psh {
+fn psh(db: PshDb) -> Psh {
     let term = Term::stdout();
 
-    let master_password = prompt_master_password();
+    let master_password = prompt_master_password(&db);
 
-    let psh = match Psh::new(master_password) {
+    let psh = match Psh::new(master_password, db) {
         Ok(psh) => psh,
         Err(error) => {
             term.write_line(&error.to_string()).unwrap();
@@ -29,14 +29,15 @@ fn psh() -> Psh {
 fn main() {
     let cli = Cli::parse();
     let term = Term::stdout();
+    let db = PshDb::default();
 
     if cli.list {
-        if Psh::has_db() {
-            print_aliases(&psh());
+        if db.exists() {
+            print_aliases(&psh(db));
             before_cleanup_on_enter_or_timeout(|| {});
         }
     } else if cli.remove {
-        let psh = psh();
+        let mut psh = psh(db);
         let alias = cli.alias
             .expect("Alias is not given");
         match psh.remove_alias_from_db(&alias) {
@@ -47,7 +48,7 @@ fn main() {
             }
         }
     } else {
-        let mut psh = psh();
+        let mut psh = psh(db);
         let alias =
             if let Some(cli_alias) = cli.alias {
                 cli_alias
