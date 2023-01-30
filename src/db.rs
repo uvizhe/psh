@@ -9,6 +9,7 @@ use zeroize::Zeroize;
 use crate::ZeroizingString;
 
 pub const DB_FILE: &str = ".psh.db";
+const DEBUG_DB_PATH: &str = "/tmp/psh.db";
 
 pub trait PshStore {
     /// Checks if `psh` alias database is present and has any records.
@@ -29,21 +30,16 @@ pub struct PshDb {
 }
 
 impl PshDb {
-    pub fn new(path: Option<&Path>) -> Self {
-        let mut db_path: PathBuf;
-        if let Some(path) = path {
+    pub fn new(path: &Path) -> Self {
+        let db_path =
             if path.has_root() {
-                db_path = path.to_path_buf();
+                path.to_path_buf()
             } else {
-                db_path = home::home_dir()
+                let mut db_path = home::home_dir()
                     .expect("User has no home directory");
                 db_path.push(path);
-            }
-        } else {
-            db_path = home::home_dir()
-                .expect("User has no home directory");
-            db_path.push(DB_FILE);
-        }
+                db_path
+            };
 
         Self {
             path: db_path,
@@ -60,7 +56,16 @@ impl PshDb {
 
 impl Default for PshDb {
     fn default() -> Self {
-        Self::new(Some(&Path::new(DB_FILE)))
+        let mut db_path = home::home_dir()
+            .expect("User has no home directory");
+        db_path.push(DB_FILE);
+
+        // Substitute database path for testing purposes in debug builds
+        if cfg!(debug_assertions) {
+            db_path = PathBuf::from(DEBUG_DB_PATH);
+        }
+
+        Self::new(&db_path)
     }
 }
 
@@ -112,7 +117,7 @@ impl PshStore for PshDb {
             match reader.read_line(&mut buf) {
                 Ok(0) => break,
                 Ok(_) => {
-                    if **record != buf {
+                    if **record != buf.trim() {
                         writeln!(writer, "{}", buf.clone())?;
                     }
                 }

@@ -42,10 +42,17 @@ fn hash_master_password(master_password: &ZeroizingString) -> Result<ZeroizingVe
         bail!(PshError::MasterPasswordTooShort);
     }
     let mut argon2_params = ParamsBuilder::new();
-    argon2_params.m_cost(MASTER_PASSWORD_MEM_COST)
-        .expect("Error setting Argon2 memory cost");
-    argon2_params.t_cost(MASTER_PASSWORD_TIME_COST)
-        .expect("Error setting Argon2 time cost");
+    if cfg!(debug_assertions) {
+        argon2_params.m_cost(MASTER_PASSWORD_MEM_COST / 64)
+            .expect("Error setting Argon2 memory cost");
+        argon2_params.t_cost(MASTER_PASSWORD_TIME_COST / 10)
+            .expect("Error setting Argon2 time cost");
+    } else {
+        argon2_params.m_cost(MASTER_PASSWORD_MEM_COST)
+            .expect("Error setting Argon2 memory cost");
+        argon2_params.t_cost(MASTER_PASSWORD_TIME_COST)
+            .expect("Error setting Argon2 time cost");
+    }
     let argon2_params = argon2_params.params()
         .expect("Error getting Argon2 params");
 
@@ -100,16 +107,17 @@ impl Psh {
     /// # Examples
     ///
     /// ```
-    /// use psh::{Psh, ZeroizingString};
+    /// use psh::{Psh, PshDb, ZeroizingString};
     ///
     /// let psh = Psh::new(
-    ///         ZeroizingString::new("password".to_string())
+    ///         ZeroizingString::new("password".to_string()),
+    ///         PshDb::default(),
     ///     ).expect("Error initializing Psh");
     /// let alias = ZeroizingString::new("alias".to_string());
     /// let secret = ZeroizingString::new("secret".to_string());
     /// let password = psh.derive_password(&alias, Some(secret), None);
     ///
-    /// assert_eq!(password.as_str(), "aneS(kwe1/|'CW#,");
+    /// assert_eq!(password.as_str(), "MBF>VgO/UsR-OeQU");
     /// ```
     pub fn derive_password(
         &self,
