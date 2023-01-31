@@ -14,7 +14,11 @@ mod alias_data;
 use alias_data::AliasData;
 
 mod db;
-pub use db::{PshDb, PshStore};
+pub use db::PshStore;
+#[cfg(not(feature = "web"))]
+pub use db::PshDb;
+#[cfg(feature = "web")]
+pub use db::PshWebDb;
 
 /// Maximum length for alias in bytes
 pub const ALIAS_MAX_BYTES: usize = 79;
@@ -433,6 +437,14 @@ pub enum PshError {
 
     #[error("Wrong master password")]
     MasterPasswordWrong,
+
+    #[cfg(feature = "web")]
+    #[error("Cannot add alias to DB: {0}")]
+    WebDbAliasAppendError(ZeroizingString),
+
+    #[cfg(feature = "web")]
+    #[error("Cannot remove alias from DB: {0}")]
+    WebDbAliasRemoveError(ZeroizingString),
 }
 
 #[cfg(test)]

@@ -7,23 +7,10 @@ use anyhow::Result;
 use zeroize::Zeroize;
 
 use crate::ZeroizingString;
+use super::PshStore;
 
 pub const DB_FILE: &str = ".psh.db";
 const DEBUG_DB_PATH: &str = "/tmp/psh.db";
-
-pub trait PshStore {
-    /// Checks if `psh` alias database is present and has any records.
-    fn exists(&self) -> bool;
-
-    /// Iterates over `psh` alias database records.
-    fn records(&self) -> Box<dyn Iterator<Item=ZeroizingString>>;
-
-    /// Appends record to `psh` alias database.
-    fn append(&mut self, record: &ZeroizingString) -> Result<()>;
-
-    /// Deletes record from `psh` alias database.
-    fn delete(&mut self, record: &ZeroizingString) -> Result<()>;
-}
 
 pub struct PshDb {
     path: PathBuf,
