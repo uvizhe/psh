@@ -105,8 +105,9 @@ impl PshStore for PshDb {
                 Ok(0) => break,
                 Ok(_) => {
                     if **record != buf.trim() {
-                        writeln!(writer, "{}", buf.clone())?;
+                        writeln!(writer, "{}", buf.trim())?;
                     }
+                    buf.zeroize();
                 }
                 Err(e) => panic!("Failed to read from file: {}", e),
             }
