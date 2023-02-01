@@ -152,7 +152,7 @@ impl Psh {
         }
 
         let secret = secret.unwrap_or_else(|| ZeroizingString::new("".to_string()));
-        let mut local_nonce = 0;
+        let mut local_nonce: u64 = 0;
         loop {
             let bytes = self.generate_bytes(alias, &secret, local_nonce);
             if let Ok(password_string) = Self::produce_password(charset, bytes) {
@@ -266,7 +266,7 @@ impl Psh {
         &self,
         alias: &ZeroizingString,
         secret: &ZeroizingString,
-        nonce: usize,
+        nonce: u64,
     ) -> ZeroizingVec {
         let mut argon2_params = ParamsBuilder::new();
         argon2_params.output_len(COLLECTED_BYTES_LEN)
