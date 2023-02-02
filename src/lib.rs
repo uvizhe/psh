@@ -253,7 +253,9 @@ impl Psh {
             let alias_data = self.known_aliases.get(alias).unwrap();
             let encrypted_alias = alias_data.encrypted_alias().unwrap().clone();
 
-            self.db.delete(&encrypted_alias)?
+            self.db.delete(&encrypted_alias)?;
+
+            self.known_aliases.remove(&alias_data.alias().clone());
         } else {
             bail!(PshError::DbAliasRemoveError(alias.clone()));
         }
