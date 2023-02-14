@@ -7,7 +7,8 @@ use clipboard::{ClipboardContext, ClipboardProvider};
 use console::Term;
 
 use crate::cli::*;
-use psh::{Psh, PshDb, PshStore};
+use psh::{Psh, PshStore};
+use psh_db::PshDb;
 
 mod cli;
 

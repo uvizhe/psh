@@ -1,15 +1,30 @@
 [package]
 name = "psh"
-license = "MIT"
-version = "0.3.0"
-edition = "2021"
-authors = ["Alexander Uvizhev"]
+version = "0.4.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
-description = "Password generator/manager that derives deterministic passwords from a set of inputs"
-repository = "https://github.com/uvizhe/psh"
-keywords = ["password", "password-generator", "password-manager", "security", "cli"]
+description = "Password generator/manager library that derives deterministic passwords from a set of inputs"
+keywords = ["password", "password-generator", "password-manager", "security"]
 exclude = ["*.gif", "*.png"]
 readme = "README_crate.md"
+
+[workspace]
+members = ["db", "webdb"]
+exclude = ["cli"]
+
+[workspace.package]
+authors = ["Alexander Uvizhev"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/uvizhe/psh"
+
+[workspace.dependencies]
+anyhow = "1.0.68"
+thiserror = "1.0.38"
+zeroize = { version = "1.5.7", features = ["zeroize_derive"] }
 
 [dependencies]
 anyhow = "1.0.68"
@@ -17,29 +32,9 @@ argon2 = { version = "0.4.1", features = ["alloc", "zeroize"] }
 base64ct = "1.5.3"
 bitvec = "1.0.1"
 chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["getrandom", "heapless"] }
-home = { version = "0.5.4", optional = true }
 once_cell = "1.16.0"
-thiserror = "1.0.38"
-zeroize = { version = "1.5.7", features = ["zeroize_derive"] }
-
-clap = { version = "3.2.20", features = ["derive"], optional = true }
-clipboard = { version = "0.5.0", optional = true }
-console = { version = "0.15.2", optional = true }
-ctrlc = { version = "3.2.4", optional = true }
-dialoguer = { version = "0.10.2", features = ["zeroize"], optional = true }
-
-getrandom = { version = "0.2", features = ["js"], optional = true }
-web-sys = { version = "0.3.60", features = ["Storage", "Window"], optional = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 test-case = "2.2.2"
-
-[features]
-default = ["home"]
-cli = ["clap", "clipboard", "console", "ctrlc", "dialoguer"]
-web = ["getrandom", "web-sys"]
-
-[[bin]]
-name = "psh"
-path = "bin/cli/main.rs"
-required-features = ["cli"]

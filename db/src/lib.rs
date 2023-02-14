@@ -1,3 +1,7 @@
+//! This crate provides alias database backend for [`psh`] using plain file as a storage.
+//!
+//! [`psh`]: ../psh/index.html
+
 use std::fs::{self, File, Permissions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -6,17 +10,26 @@ use std::os::unix::fs::PermissionsExt;
 use anyhow::Result;
 use zeroize::Zeroize;
 
-use crate::ZeroizingString;
-use super::PshStore;
+use psh::{PshStore, ZeroizingString};
 
+/// Default filename to be used within user home directory unless specified.
 pub const DB_FILE: &str = ".psh.db";
 const DEBUG_DB_PATH: &str = "/tmp/psh.db";
 
+/// `psh` alias database.
 pub struct PshDb {
     path: PathBuf,
 }
 
 impl PshDb {
+    /// Creates new instance of database with specified `path`. If given `path` is relative,
+    /// prepends it with user home directory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if user has no [`home directory`].
+    ///
+    /// [`home directory`]: https://docs.rs/home/latest/home/
     pub fn new(path: &Path) -> Self {
         let db_path =
             if path.has_root() {

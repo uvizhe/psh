@@ -1,0 +1,15 @@
+[package]
+name = "psh-webdb"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WASM-compatible `psh` alias database backend using LocalStorage Web API"
+
+[dependencies]
+psh = { path = "../", version = "0.4.0" }
+anyhow = { workspace = true }
+getrandom = { version = "0.2", features = ["js"] }
+thiserror = { workspace = true }
+web-sys = { version = "0.3.60", features = ["Storage", "Window"] }

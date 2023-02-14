@@ -1,9 +1,16 @@
+//! This crate provides alias database backend for [`psh`] using LocalStorage Web API
+//!
+//! This crate is intended to be used along with [`psh`] when building for WASM targets.
+//!
+//! [`psh`]: ../psh/index.html
+
 use anyhow::Result;
+use thiserror::Error;
 use web_sys::{self, Storage};
 
-use crate::{PshError, ZeroizingString};
-use super::PshStore;
+use psh::{PshStore, ZeroizingString};
 
+/// WASM compatible `psh` alias database.
 pub struct PshWebDb {
     local_storage: Storage,
 }
@@ -30,14 +37,14 @@ impl PshStore for PshWebDb {
 
     fn append(&mut self, record: &ZeroizingString) -> Result<()> {
         self.local_storage.set_item(record, "psh")
-            .map_err(|js_err| PshError::WebDbAliasAppendError(
+            .map_err(|js_err| PshWebDbError::AliasAppendError(
                     ZeroizingString::new(js_err.as_string().unwrap())))?;
         Ok(())
     }
 
     fn delete(&mut self, record: &ZeroizingString) -> Result<()> {
         self.local_storage.remove_item(record)
-            .map_err(|js_err| PshError::WebDbAliasRemoveError(
+            .map_err(|js_err| PshWebDbError::AliasRemoveError(
                     ZeroizingString::new(js_err.as_string().unwrap())))?;
         Ok(())
     }
@@ -78,4 +85,14 @@ impl Iterator for PshWebDbIter {
         }
         None
     }
+}
+
+/// Error types
+#[derive(Error, Debug)]
+pub enum PshWebDbError {
+    #[error("Cannot add alias to DB: {0}")]
+    AliasAppendError(ZeroizingString),
+
+    #[error("Cannot remove alias from DB: {0}")]
+    AliasRemoveError(ZeroizingString),
 }

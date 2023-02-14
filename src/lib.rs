@@ -13,12 +13,8 @@ use zeroize::{ZeroizeOnDrop, Zeroizing};
 mod alias_data;
 use alias_data::AliasData;
 
-mod db;
-pub use db::PshStore;
-#[cfg(not(feature = "web"))]
-pub use db::PshDb;
-#[cfg(feature = "web")]
-pub use db::PshWebDb;
+pub mod store;
+pub use store::PshStore;
 
 /// Maximum length for alias in bytes
 pub const ALIAS_MAX_BYTES: usize = 79;
@@ -111,11 +107,11 @@ impl Psh {
     /// # Examples
     ///
     /// ```
-    /// use psh::{Psh, PshDb, ZeroizingString};
+    /// use psh::{Psh, ZeroizingString, store::PshMemDb};
     ///
     /// let psh = Psh::new(
     ///         ZeroizingString::new("password".to_string()),
-    ///         PshDb::default(),
+    ///         PshMemDb::new(),
     ///     ).expect("Error initializing Psh");
     /// let alias = ZeroizingString::new("alias".to_string());
     /// let secret = ZeroizingString::new("secret".to_string());
@@ -439,14 +435,6 @@ pub enum PshError {
 
     #[error("Wrong master password")]
     MasterPasswordWrong,
-
-    #[cfg(feature = "web")]
-    #[error("Cannot add alias to DB: {0}")]
-    WebDbAliasAppendError(ZeroizingString),
-
-    #[cfg(feature = "web")]
-    #[error("Cannot remove alias from DB: {0}")]
-    WebDbAliasRemoveError(ZeroizingString),
 }
 
 #[cfg(test)]

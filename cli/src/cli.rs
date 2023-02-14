@@ -12,9 +12,10 @@ use dialoguer::{
 };
 
 use psh::{
-    CharSet, Psh, PshDb, PshStore, ZeroizingString,
+    CharSet, Psh, PshStore, ZeroizingString,
     ALIAS_MAX_BYTES, MASTER_PASSWORD_MIN_LEN
 };
+use psh_db::PshDb;
 
 const SAFEGUARD_TIMEOUT: u64 = 120;
 

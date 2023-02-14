@@ -19,7 +19,7 @@ Use of master password removes the requirement for a secret word to be strong (*
 not use it), so user can choose easily memorable alias and secret word without compromising
 security. *psh* uses Argon2 algorithm to generate passwords, which makes it harder to guess passwords
 even if part of input values is known. Aliases, that was previously used (along with selected
-character set for password generation) are stored in a simple DB file, so user don't need to select
+character set for password generation) are stored in a database, so user don't need to select
 character set each time a password is being generated, and they are encrypted.
 
 ![](/psh.gif "")
@@ -30,11 +30,10 @@ character set each time a password is being generated, and they are encrypted.
 
 ## TODO
 
-* (lib) Make internal database optional, instead allow using any DB
 * Build Android app
 * Integrate with `keyutils`/`libsecret`
 
 ## Other notes
 
-I wrote this code as a part of my study of Rust, it's not perfect, can contain critical security
+I write this code as a part of my study of Rust, it's not perfect, can contain critical security
 bugs, and the whole idea can be flawed.

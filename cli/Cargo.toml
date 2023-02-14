@@ -1,0 +1,23 @@
+[package]
+name = "psh-cli"
+version = "0.4.0"
+authors = ["Alexander Uvizhev"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/uvizhe/psh"
+
+description = "Password generator/manager that derives deterministic passwords from a set of inputs"
+keywords = ["password", "password-generator", "password-manager", "security", "cli"]
+
+[dependencies]
+psh = { path = "../", version = "0.4.0" }
+psh-db = { path = "../db", version = "0.1.0" }
+clap = { version = "3.2.20", features = ["derive"] }
+clipboard = { version = "0.5.0" }
+console = { version = "0.15.2" }
+ctrlc = { version = "3.2.4" }
+dialoguer = { version = "0.10.2", features = ["zeroize"] }
+
+[[bin]]
+name = "psh"
+path = "src/main.rs"
