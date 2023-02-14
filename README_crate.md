@@ -89,5 +89,5 @@ There are other backends available: [`psh_db::PshDb`] which uses plain file and
 [`psh_webdb::PshWebDb`] which uses LocalStorage Web API.
 
 [`PshMemDb`]: ./store/struct.PshMemDb.html
-[`psh_db::PshDb`]: ../psh_db/struct.PshDb.html
-[`psh_webdb::PshWebDb`]: ../psh_webdb/struct.PshWebDb.html
+[`psh_db::PshDb`]: https://docs.rs/psh-db/latest/psh_db/struct.PshDb.html
+[`psh_webdb::PshWebDb`]: https://docs.rs/psh-webdb/latest/psh_webdb/struct.PshWebDb.html

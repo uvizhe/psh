@@ -9,11 +9,11 @@ use crate::ZeroizingString;
 /// Methods of this trait are used by Psh for alias storage management. The trait has to be
 /// implemented by any custom database driver.
 ///
-/// This crate has currently two database implementations: [`PshDb`] for a plain file storage
-/// and [`PshWebDb`] for a in-browser LocalStorage.
+/// For examples see two database implementations: [`psh_db::PshDb`] for a plain file
+/// storage and [`psh_webdb::PshWebDb`] for a in-browser LocalStorage.
 ///
-/// [`PshDb`]: ../psh_db/struct.PshDb.html
-/// [`PshWebDb`]: ../psh_webdb/struct.PshWebDb.html
+/// [`psh_db::PshDb`]: https://docs.rs/psh-db/latest/psh_db/struct.PshDb.html
+/// [`psh_webdb::PshWebDb`]: https://docs.rs/psh-webdb/latest/psh_webdb/struct.PshWebDb.html
 pub trait PshStore {
     /// Checks if `psh` alias database is present and has any records.
     ///

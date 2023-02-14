@@ -1,6 +1,6 @@
 //! This crate provides alias database backend for [`psh`] using plain file as a storage.
 //!
-//! [`psh`]: ../psh/index.html
+//! [`psh`]: https://docs.rs/psh/latest/psh
 
 use std::fs::{self, File, Permissions};
 use std::io::{BufRead, BufReader, BufWriter, Write};

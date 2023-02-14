@@ -2,7 +2,7 @@
 //!
 //! This crate is intended to be used along with [`psh`] when building for WASM targets.
 //!
-//! [`psh`]: ../psh/index.html
+//! [`psh`]: https://docs.rs/psh/latest/psh
 
 use anyhow::Result;
 use thiserror::Error;
