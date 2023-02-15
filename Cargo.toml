@@ -8,6 +8,7 @@ repository.workspace = true
 
 description = "Password generator/manager library that derives deterministic passwords from a set of inputs"
 keywords = ["password", "password-generator", "password-manager", "security"]
+categories = ["no-std"]
 exclude = ["*.gif", "*.png"]
 readme = "README_crate.md"
 
@@ -27,14 +28,20 @@ thiserror = "1.0.38"
 zeroize = { version = "1.5.7", features = ["zeroize_derive"] }
 
 [dependencies]
-anyhow = "1.0.68"
+anyhow = { version = "1.0.68", default-features = false }
 argon2 = { version = "0.4.1", features = ["alloc", "zeroize"] }
 base64ct = "1.5.3"
-bitvec = "1.0.1"
+bitvec = { version = "1.0.1", default-features = false }
 chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["getrandom", "heapless"] }
-once_cell = "1.16.0"
-thiserror = { workspace = true }
+once_cell = { version = "1.16.0", default-features = false }
 zeroize = { workspace = true }
+
+# This one is not used directly but has to be included to enable features
+getrandom = "0.2.8"
 
 [dev-dependencies]
 test-case = "2.2.2"
+
+[features]
+rdrand = ["getrandom/rdrand"]
+custom_rand = ["getrandom/custom"]

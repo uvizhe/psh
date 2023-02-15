@@ -1,5 +1,8 @@
 //! Module defines [`PshStore`] trait and its minimal implementation: [`PshMemDb`].
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use anyhow::Result;
 
 use crate::ZeroizingString;

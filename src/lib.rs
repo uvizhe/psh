@@ -1,17 +1,25 @@
 #![doc = include_str!("../README_crate.md")]
 
-use std::collections::BTreeMap;
-use std::fmt;
-use std::ops::{Deref, DerefMut};
+#![no_std]
+
+extern crate alloc;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use core::fmt;
+use core::ops::{Deref, DerefMut};
 
 use anyhow::{bail, Result};
 use argon2::{Algorithm, Argon2, Params, ParamsBuilder, Version};
 use bitvec::prelude::*;
-use thiserror::Error;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 mod alias_data;
 use alias_data::AliasData;
+
+mod error;
+use error::Error;
 
 pub mod store;
 pub use store::PshStore;
@@ -39,7 +47,7 @@ const SYMBOLS: [char; 104] = [
 
 fn hash_master_password(master_password: &ZeroizingString) -> Result<ZeroizingVec> {
     if master_password.chars().count() < MASTER_PASSWORD_MIN_LEN {
-        bail!(PshError::MasterPasswordTooShort);
+        bail!(Error::MasterPasswordTooShort);
     }
     let mut argon2_params = ParamsBuilder::new();
     if cfg!(debug_assertions) {
@@ -226,7 +234,7 @@ impl Psh {
         charset: Option<CharSet>,
     ) -> Result<()> {
         if self.alias_is_known(alias) {
-            bail!(PshError::DbAliasAppendError(alias.clone()));
+            bail!(Error::DbAliasAppendError(alias.clone()));
         }
         let mut alias_data = AliasData::new(
             alias,
@@ -253,7 +261,7 @@ impl Psh {
 
             self.known_aliases.remove(&alias_data.alias().clone());
         } else {
-            bail!(PshError::DbAliasRemoveError(alias.clone()));
+            bail!(Error::DbAliasRemoveError(alias.clone()));
         }
         Ok(())
     }
@@ -416,25 +424,6 @@ impl Deref for ZeroizingVec {
     fn deref(&self) -> &Self::Target {
         &self.vec
     }
-}
-
-/// Errors facing end-user
-#[derive(Error, Debug)]
-pub enum PshError {
-    #[error("Unable to decode DB record {0} as Base64: {1}")]
-    DbAliasDecodeError(ZeroizingString, base64ct::Error),
-
-    #[error("Cannot add alias `{0}` to DB: alias already present")]
-    DbAliasAppendError(ZeroizingString),
-
-    #[error("Cannot remove alias `{0}` from DB: alias does not exist")]
-    DbAliasRemoveError(ZeroizingString),
-
-    #[error("Master password is too short (less than {} characters)", MASTER_PASSWORD_MIN_LEN)]
-    MasterPasswordTooShort,
-
-    #[error("Wrong master password")]
-    MasterPasswordWrong,
 }
 
 #[cfg(test)]

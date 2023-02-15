@@ -1,3 +1,6 @@
+use alloc::string::ToString;
+use alloc::borrow::ToOwned;
+
 use chacha20poly1305::{
     aead::{AeadCore, AeadInPlace, KeyInit, OsRng, heapless::Vec as HVec},
     ChaCha20Poly1305, Nonce,
@@ -8,7 +11,7 @@ use once_cell::unsync::OnceCell;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::{
-    CharSet, PshError, ZeroizingString, ZeroizingVec,
+    CharSet, Error, ZeroizingString, ZeroizingVec,
     ALIAS_MAX_BYTES,
 };
 
@@ -131,8 +134,10 @@ impl AliasData {
     fn decrypt_alias(encrypted_alias: &ZeroizingString, key: &ZeroizingVec) -> Result<Self> {
         // Decode Base64 alias data representation
         let mut decoder_buf = Zeroizing::new([0u8; 144]);
-        let enc_alias = Base64::decode(&encrypted_alias.as_bytes(), &mut *decoder_buf)
-            .map_err(|err| PshError::DbAliasDecodeError(encrypted_alias.clone(), err))?;
+        let enc_alias = match Base64::decode(&encrypted_alias.as_bytes(), &mut *decoder_buf) {
+            Ok(res) => res,
+            Err(err) => bail!(Error::DbAliasDecodeError(encrypted_alias.clone(), err.to_string()))
+        };
 
         let use_secret = Self::extract_secret_flag(enc_alias[0]);
         let charset = Self::extract_charset(enc_alias[0]);
@@ -153,10 +158,13 @@ impl AliasData {
                         .collect(),
                 );
                 decrypter_buf.zeroize();
-                let alias = ZeroizingString::new(
-                    std::str::from_utf8(&alias_bytes)?
-                        .to_string()
-                );
+                let alias = match core::str::from_utf8(&alias_bytes) {
+                    Ok(alias_str) => ZeroizingString::new(alias_str.to_string()),
+                    Err(err) => bail!(
+                        Error::DbAliasDecodeError(encrypted_alias.clone(),
+                        err.to_string())
+                    )
+                };
                 Ok(Self {
                     alias,
                     encrypted_alias: OnceCell::with_value(encrypted_alias.clone()),
@@ -164,7 +172,7 @@ impl AliasData {
                     charset,
                 })
             }
-            Err(_) => bail!(PshError::MasterPasswordWrong)
+            Err(_) => bail!(Error::MasterPasswordWrong)
         }
     }
 }
