@@ -15,6 +15,11 @@ use super::{
     ALIAS_MAX_BYTES,
 };
 
+const AEAD_BUF_LEN: usize = ALIAS_MAX_BYTES + 1 + 16; // 1 byte for flags and 16 for auth tag
+const BASE64_BUF_LEN: usize = (AEAD_BUF_LEN + 12) * 4 / 3; // 12 bytes for nonce
+// Compile-time checking that encrypted alias with flags can nicely fit into Base64 string
+const _: () = assert!((AEAD_BUF_LEN + 12) % 3 == 0, "Bad ALIAS_MAX_BYTES value");
+
 #[derive(Debug)]
 pub(crate) struct AliasData {
     alias: ZeroizingString,
@@ -104,16 +109,16 @@ impl AliasData {
         let cipher = ChaCha20Poly1305::new_from_slice(&*key)
             .expect("Invalid key length");
         let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng); // 96-bits; unique per message
-        let mut encrypter_buf = HVec::<u8, 95>::new(); // ALIAS_MAX_BYTES + 16 auth tag
+        let mut encrypter_buf = HVec::<u8, AEAD_BUF_LEN>::new();
+        encrypter_buf.push(self.encode_flags()).unwrap();
         encrypter_buf.extend_from_slice(&alias)
             .expect("The slice is too big");
         cipher.encrypt_in_place(&nonce, b"", &mut encrypter_buf)
             .expect("Buffer is too small to hold resulting cyphertext");
 
-        // Concatenate encrypted alias with alias flags and nonce
+        // Concatenate encrypted alias with nonce
         let db_record_bytes = Zeroizing::new(
             [
-                &self.encode_flags().to_le_bytes(),
                 nonce.as_slice(),
                 &encrypter_buf,
             ]
@@ -122,7 +127,7 @@ impl AliasData {
         encrypter_buf.zeroize();
 
         // Encode with Base64
-        let mut encoder_buf = Zeroizing::new([0u8; 144]); // 108 "full" bytes = 144 bytes of Base64
+        let mut encoder_buf = Zeroizing::new([0u8; BASE64_BUF_LEN]);
         match Base64::encode(&db_record_bytes, &mut *encoder_buf) {
             Ok(base64_str) => self.encrypted_alias
                 .set(ZeroizingString::new(base64_str.to_owned()))
@@ -133,26 +138,27 @@ impl AliasData {
 
     fn decrypt_alias(encrypted_alias: &ZeroizingString, key: &ZeroizingVec) -> Result<Self> {
         // Decode Base64 alias data representation
-        let mut decoder_buf = Zeroizing::new([0u8; 144]);
+        let mut decoder_buf = Zeroizing::new([0u8; BASE64_BUF_LEN]);
         let enc_alias = match Base64::decode(&encrypted_alias.as_bytes(), &mut *decoder_buf) {
             Ok(res) => res,
             Err(err) => bail!(Error::DbAliasDecodeError(encrypted_alias.clone(), err.to_string()))
         };
 
-        let use_secret = Self::extract_secret_flag(enc_alias[0]);
-        let charset = Self::extract_charset(enc_alias[0]);
-
         // Decrypt alias with ChaCha20Poly1305
         let cipher = ChaCha20Poly1305::new_from_slice(&*key)
             .expect("Invalid key length");
-        let nonce = Nonce::from_slice(&enc_alias[1..13]);
-        let mut decrypter_buf = HVec::<u8, 128>::new();
-        decrypter_buf.extend_from_slice(&enc_alias[13..])
+        let nonce = Nonce::from_slice(&enc_alias[0..12]);
+        let mut decrypter_buf = HVec::<u8, AEAD_BUF_LEN>::new();
+        decrypter_buf.extend_from_slice(&enc_alias[12..])
             .expect("The slice is too big");
         match cipher.decrypt_in_place(&nonce, b"", &mut decrypter_buf) {
             Ok(_) => {
+                let flags = decrypter_buf[0];
+                let use_secret = Self::extract_secret_flag(flags);
+                let charset = Self::extract_charset(flags);
+
                 let alias_bytes = ZeroizingVec::new(
-                    decrypter_buf.iter()
+                    decrypter_buf[1..].iter()
                         .filter(|x| **x != 0x0) // Unpad ZeroPadding
                         .copied()
                         .collect(),
