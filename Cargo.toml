@@ -1,13 +1,13 @@
 [package]
 name = "psh"
-version = "0.4.0"
+version = "0.5.0"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 description = "Password generator/manager library that derives deterministic passwords from a set of inputs"
-keywords = ["password", "password-generator", "password-manager", "security"]
+keywords = ["no_std", "password", "password-generator", "password-manager", "security"]
 categories = ["no-std"]
 exclude = ["*.gif", "*.png"]
 readme = "README_crate.md"
