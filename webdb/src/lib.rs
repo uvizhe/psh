@@ -4,8 +4,9 @@
 //!
 //! [`psh`]: https://docs.rs/psh/latest/psh
 
-use anyhow::Result;
-use thiserror::Error;
+use std::fmt;
+
+use anyhow::{bail, Result};
 use web_sys::{self, Storage};
 
 use psh::{PshStore, ZeroizingString};
@@ -36,17 +37,19 @@ impl PshStore for PshWebDb {
     }
 
     fn append(&mut self, record: &ZeroizingString) -> Result<()> {
-        self.local_storage.set_item(record, "psh")
-            .map_err(|js_err| PshWebDbError::AliasAppendError(
-                    ZeroizingString::new(js_err.as_string().unwrap())))?;
-        Ok(())
+        match self.local_storage.set_item(record, "psh") {
+            Ok(_) => Ok(()),
+            Err(js_err) => bail!(Error::AliasAppendError(
+                    ZeroizingString::new(js_err.as_string().unwrap())))
+        }
     }
 
     fn delete(&mut self, record: &ZeroizingString) -> Result<()> {
-        self.local_storage.remove_item(record)
-            .map_err(|js_err| PshWebDbError::AliasRemoveError(
-                    ZeroizingString::new(js_err.as_string().unwrap())))?;
-        Ok(())
+        match self.local_storage.remove_item(record) {
+            Ok(_) => Ok(()),
+            Err(js_err) => bail!(Error::AliasRemoveError(
+                    ZeroizingString::new(js_err.as_string().unwrap())))
+        }
     }
 }
 
@@ -87,12 +90,27 @@ impl Iterator for PshWebDbIter {
     }
 }
 
-/// Error types
-#[derive(Error, Debug)]
-pub enum PshWebDbError {
-    #[error("Cannot add alias to DB: {0}")]
+/// Error type.
+#[derive(Debug)]
+enum Error {
+    /// Error appending alias to database.
     AliasAppendError(ZeroizingString),
 
-    #[error("Cannot remove alias from DB: {0}")]
+    /// Error removing alias from database.
     AliasRemoveError(ZeroizingString),
 }
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::AliasAppendError(err_string) => write!(
+                f, "Cannot add alias to DB: {}", err_string
+            ),
+            Error::AliasRemoveError(err_string) => write!(
+                f, "Cannot remove alias from DB: {}", err_string
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
