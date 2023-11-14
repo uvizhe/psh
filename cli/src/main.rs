@@ -34,8 +34,8 @@ fn main() {
 
     if cli.list {
         if db.exists() {
-            print_aliases(&psh(db));
-            before_cleanup_on_enter_or_timeout(|| {});
+            let output_len = print_aliases(&psh(db));
+            before_cleanup_on_enter_or_timeout(output_len, || {});
         }
     } else if cli.remove {
         let mut psh = psh(db);
@@ -84,6 +84,7 @@ fn main() {
         if cli.paranoid {
             output_password.replace_range(3..13, "**********");
         }
+        let password_len = output_password.len();
         term.write_line(&output_password)
             .unwrap();
 
@@ -91,7 +92,7 @@ fn main() {
             psh.append_alias_to_db(&alias, Some(use_secret), charset).unwrap();
         }
 
-        before_cleanup_on_enter_or_timeout(|| {
+        before_cleanup_on_enter_or_timeout(password_len, || {
             if cli.clipboard {
                 // TODO: use `x11-clipboard` instead of `clipboard`?
                 let mut clipboard: ClipboardContext = ClipboardProvider::new()

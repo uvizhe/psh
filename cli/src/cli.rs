@@ -5,11 +5,12 @@ use std::thread;
 use std::time::Duration;
 
 use clap::{AppSettings, ArgGroup, Parser};
-use console::Term;
+use console::{Term, measure_text_width};
 use dialoguer::{
     theme::Theme,
     Confirm, Input, Select, Password,
 };
+use terminal_size::{Width, terminal_size};
 
 use psh::{
     CharSet, Psh, PshStore, ZeroizingString,
@@ -167,24 +168,30 @@ pub fn prompt_secret() -> ZeroizingString {
     )
 }
 
-pub fn print_aliases(psh: &Psh) {
+pub fn print_aliases(psh: &Psh) -> usize {
     let term = Term::stdout();
     let aliases: Vec<&str> = psh.aliases()
         .iter()
         .map(|x| x.as_str())
         .collect();
-    term.write_line(&format!("Previously used aliases: {}", aliases.join(", ")))
-        .unwrap();
+    let line = format!("Previously used aliases: {}", aliases.join(", "));
+    term.write_line(&line).unwrap();
+
+    measure_text_width(&line)
 }
 
-pub fn before_cleanup_on_enter_or_timeout<F>(f: F)
+pub fn before_cleanup_on_enter_or_timeout<F>(sensitive_text_len: usize, f: F)
 where
     F: Fn(),
 {
+    let message = "Hit Enter to exit";
+
     // Clear last lines (with password/aliases) before exiting
-    let cleanup = || {
+    let cleanup = move || {
         let term = Term::stdout();
-        term.clear_last_lines(2).unwrap();
+        let message_lines = term_lines(message.len());
+        let sensitive_lines = term_lines(sensitive_text_len);
+        term.clear_last_lines(sensitive_lines + message_lines).unwrap();
     };
 
     // Handle Ctrl-C
@@ -198,9 +205,9 @@ where
 
     thread::spawn(move || {
         let term = Term::stdout();
-        term.write_line("Hit Enter to exit").unwrap();
+        term.write_line(message).unwrap();
         term.read_line().unwrap();
-        term.clear_last_lines(1).unwrap();
+        term.move_cursor_up(1).unwrap();
         sender.send("finished").unwrap();
     });
 
@@ -210,4 +217,15 @@ where
 
     f();
     cleanup();
+}
+
+fn term_lines(len: usize) -> usize {
+    let (Width(term_width), _) = terminal_size().expect("Executing in terminal");
+    let term_width = term_width as usize;
+
+    if len % term_width == 0 {
+        len / term_width
+    } else {
+        len / term_width + 1
+    }
 }
